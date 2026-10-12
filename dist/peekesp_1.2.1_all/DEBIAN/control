@@ -1,0 +1,16 @@
+Package: peekesp
+Version: 1.2.1
+Section: utils
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.6), systemd
+Maintainer: rhshourav <rhshourav02@gmail.com>
+Homepage: https://github.com/rhshourav/PeekESP
+Description: Telemetry agent for a PeekESP display
+ Pushes this machine's CPU, memory, storage, temperature and network
+ throughput to a Cloudflare Worker, where an ESP32 with a small display
+ collects it. Both ends dial out, so neither needs an inbound port and it
+ works behind CGNAT.
+ .
+ Standard library Python throughout - no psutil, no wheels, nothing to
+ resolve at install time.

@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+# On purge only. On a plain remove the config stays, because it holds the
+# pairing code and reinstalling should not mean re-pairing every machine.
+if [ "$1" = "purge" ]; then
+    deluser --system peekesp >/dev/null 2>&1 || true
+    rm -rf /etc/peekesp
+fi
+systemctl daemon-reload >/dev/null 2>&1 || true

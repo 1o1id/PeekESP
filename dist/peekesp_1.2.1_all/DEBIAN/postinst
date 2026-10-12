@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ]; then
+    if ! id peekesp >/dev/null 2>&1; then
+        adduser --system --group --no-create-home --shell /usr/sbin/nologin peekesp
+    fi
+    chown root:root /etc/peekesp/agent.conf
+    chmod 600 /etc/peekesp/agent.conf
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    cat <<'MSG'
+
+PeekESP is installed but not paired. The device shows a code on its screen:
+
+    sudo peekesp pair K7M2-P4QX-9R
+    sudo peekesp enable
+
+MSG
+fi
