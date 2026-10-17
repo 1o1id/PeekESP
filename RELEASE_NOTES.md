@@ -38,7 +38,13 @@ costs.](windows/SIGNING.md)
 
 ---
 
-## New in 1.2.0
+## New in 1.2.1
+
+### The author has been changed to rhshourav
+
+As the shouravx repo was temporary. The PeekESP has been transfer to rhshourav. FYI both accounts belong to MD Shourav Hossain.
+
+Also added some minor ui changes.
 
 ### Sleeping no longer means unplugging it
 
