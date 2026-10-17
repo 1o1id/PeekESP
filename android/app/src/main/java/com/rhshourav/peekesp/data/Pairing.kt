@@ -1,6 +1,7 @@
 package com.rhshourav.peekesp.data
 
 import java.security.MessageDigest
+import java.security.SecureRandom
 
 /**
  * Pairing code -> stream id and read token.
@@ -20,6 +21,17 @@ object Pairing {
     const val CODE_LEN = 10
 
     data class Keys(val code: String, val stream: String, val read: String)
+
+    private val rng by lazy { SecureRandom() }
+
+    /**
+     * A fresh code for a setup that does not exist yet. 32 symbols x 10 places is
+     * 50 bits, drawn from the platform CSPRNG. 32 divides 256 evenly, so there is
+     * no modulo bias to correct. The code is the credential: never log it.
+     */
+    fun generate(): String = buildString(CODE_LEN) {
+        repeat(CODE_LEN) { append(ALPHABET[rng.nextInt(ALPHABET.length)]) }
+    }
 
     /** Dashes and case are decoration: "k7m2-p4qx-9r" is "K7M2P4QX9R". */
     fun normalise(code: String?): String =
