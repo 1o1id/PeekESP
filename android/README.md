@@ -5,7 +5,9 @@ widget that draws your device's dashboard on a glass card. The dashboard and mac
 screens come after it.
 
 ## Build
-
+```
+.\gradlew.bat assembleDebug
+```
 You need JDK 17 or newer and the Android SDK (`local.properties` with `sdk.dir`).
 The Gradle wrapper is not committed yet, because generating it needs a download:
 
