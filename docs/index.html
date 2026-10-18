@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PeekESP - live system metrics on an ESP32 desk display</title>
-<meta name="description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT.">
+<title>PeekESP - live system metrics on an ESP32 display or your Android home screen</title>
+<meta name="description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app and home-screen widget included.">
 <link rel="canonical" href="https://rhshourav.github.io/PeekESP/">
 <meta name="theme-color" content="#05070E">
 
@@ -16,14 +16,14 @@
 <meta property="og:site_name" content="PeekESP">
 <meta property="og:url" content="https://rhshourav.github.io/PeekESP/">
 <meta property="og:title" content="PeekESP - live metrics for a server 250 km away">
-<meta property="og:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT.">
+<meta property="og:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app and home-screen widget included.">
 <meta property="og:image" content="https://rhshourav.github.io/PeekESP/og.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="The PeekESP dashboard running on a LilyGO TTGO T-Display.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="PeekESP - live metrics for a server 250 km away">
-<meta name="twitter:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT.">
+<meta name="twitter:description" content="An ESP32 with a 1.14-inch display showing live CPU, RAM, storage, temperature and network for a machine anywhere on the internet - no port forward, no VPN, no account. Open source, MIT. Android app and home-screen widget included.">
 <meta name="twitter:image" content="https://rhshourav.github.io/PeekESP/og.jpg">
 
 <link rel="icon" href="favicon.ico" sizes="any">
@@ -169,6 +169,9 @@ section { padding-block: clamp(56px, 9vw, 104px); }
   align-items: start;
 }
 @media (min-width: 900px) { .hero-grid { grid-template-columns: 1.05fr .95fr; } }
+/* A grid item defaults to min-width:auto, so the unbreakable <pre> in the pairing
+   section stretched the whole column and the page scrolled sideways on phones. */
+.hero-grid > * { min-width: 0; }
 
 .lede { font-size: clamp(17px, 1.9vw, 19px); color: var(--ink-mid); }
 .lede strong { color: var(--ink); font-weight: 500; }
@@ -490,8 +493,9 @@ footer { padding-block: 44px 60px; }
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/rhshourav/PeekESP">Build one</a>
         <a class="btn btn-ghost" href="https://github.com/rhshourav/PeekESP/releases">Download v1.2.1</a>
+        <a class="btn btn-ghost" href="#android">Android app</a>
       </div>
-      <p class="caption">Arduino + LVGL &middot; Cloudflare Worker &middot; MIT licensed</p>
+      <p class="caption">Arduino + LVGL &middot; Android &middot; Cloudflare Worker &middot; MIT licensed</p>
     </div>
 
     <div class="screen-figure">
@@ -686,17 +690,18 @@ footer { padding-block: 44px 60px; }
       <p class="eyebrow">Setup</p>
       <h2>Ten characters, typed once.</h2>
       <div class="prose stack-sm">
-        <p>The device shows a code on first boot. You type it into the desktop app.
+        <p>The device shows a code on first boot. You type it into the desktop or Android app.
         That is the whole configuration &mdash; no account, no token to copy, no
         port to open.</p>
         <p>Both sides derive the stream and both auth tokens from that code
         locally. <strong style="color:var(--ink)">The relay never sees it</strong>,
         which is why pairing needs no secrets configured on the Worker at all.</p>
       </div>
-      <pre><span class="c"># the same three lines in four languages</span>
+      <pre><span class="c"># the same three lines in every client</span>
 stream = SHA-256(<b>"peek-stream:"</b> + CODE)  first 16 hex
 push   = SHA-256(<b>"peek-push:"</b>   + CODE)  first 48 hex
 read   = SHA-256(<b>"peek-read:"</b>   + CODE)  first 48 hex</pre>
+      <!-- TODO: add the Android app's language and confirm it is covered by the same test vectors. -->
       <p class="caption prose">C++ on the device, Python in the app and the Linux agent,
       JavaScript in the Worker &mdash; all pinned against vectors generated by
       <code>openssl</code>. A drift between any two would have a machine pushing to
@@ -783,16 +788,68 @@ read   = SHA-256(<b>"peek-read:"</b>   + CODE)  first 48 hex</pre>
 
 <hr class="rule">
 
+<!-- ===================== ANDROID ===================== -->
+<section id="android">
+  <div class="wrap hero-grid">
+    <div class="stack">
+      <p class="eyebrow">On your phone</p>
+      <h2>The same readings on your home screen.</h2>
+      <div class="prose stack-sm">
+        <p>The Android app reads the same relay with the same code, so a phone, a
+        desk display and Home Assistant can all watch the same machines at once.
+        <strong style="color:var(--ink)">The ESP32 is optional.</strong></p>
+      </div>
+      <div class="prose stack-sm" style="margin-top:6px">
+        <h3>Join a network</h3>
+        <p>Type the code your device or agents already use. Dashes and case are
+        ignored.</p>
+      </div>
+      <div class="prose stack-sm">
+        <h3>Create a network</h3>
+        <p>The app generates a code. Give that code to each agent, the same way you
+        would give it to the Windows app.</p>
+      </div>
+      <div class="prose stack-sm">
+        <h3>Add the widget</h3>
+        <p>CPU and RAM, storage, temperature, throughput, uptime and link status
+        &mdash; whichever the machine reports &mdash; without opening the app.</p>
+      </div>
+    </div>
+
+    <div class="stack">
+      <!-- TODO: add a real screenshot once img/android-widget.png exists, e.g.
+      <figure>
+        <img src="img/android-widget.png" alt="The PeekESP widget on an Android home screen, showing CPU, RAM and link status.">
+        <figcaption class="caption">The widget, on a real home screen.</figcaption>
+      </figure>
+      -->
+      <dl class="specs" style="grid-template-columns:1fr">
+        <div class="spec"><dt>Requires</dt><dd>Android 8.1 or newer</dd></div>
+        <div class="spec"><dt>Install from</dt><dd>PeekESP.apk, latest release</dd></div>
+        <div class="spec"><dt>Google Play</dt><dd>coming soon</dd></div>
+        <div class="spec"><dt>Machines per code</dt><dd>6</dd></div>
+      </dl>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="https://github.com/rhshourav/PeekESP/releases/latest">Download PeekESP.apk</a>
+      </div>
+      <p class="caption">Android will ask you to allow installs from your browser or
+      file manager the first time. Switch that permission off again afterwards.</p>
+    </div>
+  </div>
+</section>
+
+<hr class="rule">
+
 <!-- ===================== INSTALL ===================== -->
 <section>
   <div class="wrap hero-grid">
     <div class="stack">
       <p class="eyebrow">Install</p>
-      <h2>Three commands, one code.</h2>
+      <h2>Pick a platform. One code.</h2>
       <div class="cmds" style="margin-top:8px">
         <div class="cmd">
           <div class="cmd-h">Windows</div>
-          <pre>winget install peekesp</pre>
+          <pre>winget install rhshourav.PeekESP</pre>
         </div>
         <div class="cmd">
           <div class="cmd-h">Linux &middot; DietPi, Debian, Raspberry Pi OS</div>
@@ -808,6 +865,13 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
           <pre>python tools/flash.py</pre>
           <p class="caption" style="margin-top:8px">Writes the prebuilt image. No Arduino IDE,
           no ESP32 core, no libraries &mdash; the only download is esptool.</p>
+        </div>
+        <div class="cmd">
+          <div class="cmd-h">Android</div>
+          <p>Download <code>PeekESP.apk</code> from the
+          <a href="https://github.com/rhshourav/PeekESP/releases/latest">latest release</a> and open it.</p>
+          <p class="caption" style="margin-top:8px">Needs Android 8.1 or newer. Not on
+          Google Play yet. <a href="#android">More on the app.</a></p>
         </div>
       </div>
     </div>
@@ -827,6 +891,8 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
         <div class="spec"><dt>Machines per code</dt><dd>6</dd></div>
         <div class="spec"><dt>WiFi networks</dt><dd>5</dd></div>
         <div class="spec"><dt>Worker tests</dt><dd>74 unit &middot; 17 live</dd></div>
+        <div class="spec"><dt>Android</dt><dd>8.1 or newer</dd></div>
+        <div class="spec"><dt>Release</dt><dd>v1.2.1</dd></div>
         <div class="spec"><dt>Licence</dt><dd>MIT</dd></div>
       </dl>
     </div>
@@ -852,9 +918,16 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
       <div class="caveat">
         <h3>The free tier is a request budget, not a device count</h3>
         <p>Each agent costs 17,280 requests a day at a five-second interval, and so
-        does each display, against Cloudflare&rsquo;s 100,000. One display and two
+        does each display &mdash; and each phone or widget that polls &mdash; against Cloudflare&rsquo;s 100,000. One display and two
         machines fits comfortably; four is close to the edge. Raising the interval to
         15&nbsp;s divides everything by three.</p>
+      </div>
+      <div class="caveat">
+        <h3>The Android app is a sideload for now</h3>
+        <p>It is not on Google Play yet, so you install the APK from the release page
+        and it will not update itself &mdash; install the next release over the top.
+        Android also decides how often a widget may refresh, so it updates far less
+        often than the display does.</p>
       </div>
       <div class="caveat">
         <h3>Pairing is trust-on-first-use</h3>
@@ -882,6 +955,7 @@ rhshourav/PeekESP/main/dietpi/install.sh | sudo sh</pre>
     <nav>
       <a href="https://github.com/rhshourav/PeekESP">Source</a>
       <a href="https://github.com/rhshourav/PeekESP/releases">Releases</a>
+      <a href="https://github.com/rhshourav/PeekESP/releases/latest">Android APK</a>
       <a href="https://github.com/rhshourav/PeekESP/wiki">Wiki</a>
       <a href="https://github.com/rhshourav/PeekESP/issues">Issues</a>
     </nav>
