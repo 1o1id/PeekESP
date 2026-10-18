@@ -1,12 +1,14 @@
 package com.rhshourav.peekesp
 
 import android.appwidget.AppWidgetManager
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.PersistableBundle
@@ -64,6 +66,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
@@ -85,6 +88,11 @@ import com.rhshourav.peekesp.widget.RefreshWorker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Credit and project home. */
+private const val AUTHOR = "rhshourav"
+private const val REPO_LABEL = "github.com/rhshourav/PeekESP"
+private const val REPO_URL = "https://github.com/rhshourav/PeekESP"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -142,7 +150,9 @@ private fun Screen() {
     var busy by remember { mutableStateOf(false) }
     var revealed by remember { mutableStateOf(false) }
     var confirmForget by remember { mutableStateOf(false) }
-    var showRelay by remember { mutableStateOf(false) }
+    var showRelay by rememberSaveable { mutableStateOf(false) }
+    // Re-read after the relay dialog closes so the label below stays truthful.
+    var relay by remember { mutableStateOf(RelayConfig.get(ctx)) }
 
     /**
      * One path for both modes. The difference is what a bad answer means:
@@ -275,7 +285,9 @@ private fun Screen() {
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
-        TextButton(onClick = { showRelay = true }){ Text("Relay address")}
+
+        RelayRow(relay = relay, custom = relay != RelayConfig.DEFAULT_BASE, onEdit = { showRelay = true })
+        AboutFooter(ctx)
     }
 
     if (confirmForget) {
@@ -301,14 +313,42 @@ private fun Screen() {
             },
             dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Keep") } },
         )
-        if (showRelay){
-            RelayDialog(onDismiss = { showRelay = false})
+    }
 
-        }
+    // Its own block: it must not depend on the "forget" dialog being open.
+    if (showRelay) {
+        RelayDialog(
+            onDismiss = { showRelay = false },
+            onChanged = { newBase ->
+                relay = newBase
+                notice = Notice(
+                    if (newBase == RelayConfig.DEFAULT_BASE) "Using the default relay."
+                    else "Relay changed. Make sure your agents push to it too.",
+                    Tone.OK,
+                )
+            },
+        )
     }
 }
+
+// ----------------------------------------------------------------------------
+//  Relay address
+// ----------------------------------------------------------------------------
+
 @Composable
-private fun RelayDialog(onDismiss: () -> Unit) {
+private fun RelayRow(relay: String, custom: Boolean, onEdit: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            if (custom) "Relay (custom): $relay" else "Relay: $relay",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
+        )
+        TextButton(onClick = onEdit) { Text("Relay address") }
+    }
+}
+
+@Composable
+private fun RelayDialog(onDismiss: () -> Unit, onChanged: (String) -> Unit) {
     val ctx = LocalContext.current
     var text by remember { mutableStateOf(RelayConfig.get(ctx)) }
     var error by remember { mutableStateOf(false) }
@@ -317,32 +357,87 @@ private fun RelayDialog(onDismiss: () -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Relay address") },
         text = {
-            Column {
-                Text("Only change this if you run your own PeekESP relay. " +
-                     "Your agents must push to the same relay.")
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Only change this if you run your own PeekESP relay. " +
+                        "Your agents and devices must push to the same relay.",
+                )
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it; error = false },
+                    label = { Text("https://") },
                     isError = error,
                     supportingText = { if (error) Text("Enter an address starting with https://") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Uri,
+                        capitalization = KeyboardCapitalization.None,
+                        imeAction = ImeAction.Done,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                if (RelayConfig.save(ctx, text)) { RefreshWorker.refreshNow(ctx); onDismiss() } else error = true
+                if (RelayConfig.save(ctx, text)) {
+                    RefreshWorker.refreshNow(ctx)
+                    onChanged(RelayConfig.get(ctx))
+                    onDismiss()
+                } else {
+                    error = true
+                }
             }) { Text("Save") }
         },
         dismissButton = {
-            TextButton(onClick = {
-                RelayConfig.reset(ctx)
-                RefreshWorker.refreshNow(ctx)
-                text = RelayConfig.get(ctx)
-            }) { Text("Reset to default") }
+            Row {
+                TextButton(onClick = {
+                    RelayConfig.reset(ctx)
+                    RefreshWorker.refreshNow(ctx)
+                    text = RelayConfig.get(ctx)
+                    error = false
+                    onChanged(text)
+                }) { Text("Reset to default") }
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
         },
     )
 }
+
+// ----------------------------------------------------------------------------
+//  About
+// ----------------------------------------------------------------------------
+
+@Composable
+private fun AboutFooter(ctx: Context) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "PeekESP \u00B7 made by $AUTHOR",
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(Palette.TEXT),
+        )
+        TextButton(onClick = { openLink(ctx, REPO_URL) }) { Text(REPO_LABEL) }
+        Text(
+            "Version ${BuildConfig.VERSION_NAME} \u00B7 Montserrat font, SIL Open Font License",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color(Palette.DIM),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+private fun openLink(ctx: Context, url: String) {
+    val view = Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        ctx.startActivity(view)
+    } catch (e: ActivityNotFoundException) {
+        // No browser installed: nothing useful to do, and nothing worth crashing over.
+    }
+}
+
 // ----------------------------------------------------------------------------
 //  Pairing forms
 // ----------------------------------------------------------------------------

@@ -18,7 +18,7 @@ sealed interface FetchResult {
 /** Plain HttpURLConnection: no dependency, default TLS verification, no redirects. */
 object RelayClient {
     //const val DEFAULT_BASE = "https://peek-relay.peekesp.workers.dev"
-    RelayConfig.get(context)
+    //RelayConfig.get(context)
 
     // Cloudflare's edge rejects some generic client agents with error 1010 before
     // the Worker runs, so say who we are.
