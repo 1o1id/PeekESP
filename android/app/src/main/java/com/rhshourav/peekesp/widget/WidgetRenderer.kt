@@ -13,8 +13,10 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import com.rhshourav.peekesp.data.Fmt
+import com.rhshourav.peekesp.data.WidgetStyle
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * Draws the device's dashboard (PeekESP.ino, layout_metrics.h) onto a glass card.
@@ -31,11 +33,17 @@ import kotlin.math.min
  * Why "glass-like", not glass: RemoteViews cannot sample or blur the wallpaper.
  * Tint, light from two corners, a sheen and a specular rim are as far as a
  * widget can go. The tint is strong enough that text holds contrast over most
- * wallpapers; raise GLASS_*_ALPHA if you use very bright ones.
+ * wallpapers; raise "Background opacity" in the app if you use very bright ones.
+ *
+ * Both knobs come from WidgetStyle (set in the app): opacity scales the tint and
+ * the inner panel, glass scales every lighting layer.
  */
 object WidgetRenderer {
-    private const val GLASS_TOP_ALPHA = 0xBC
-    private const val GLASS_BOTTOM_ALPHA = 0xD6
+    /** The tint is lighter at the top than the bottom, by this ratio (0xBC / 0xD6, as shipped). */
+    private const val TOP_RATIO = 0xBC / 0xD6.toFloat()
+
+    /** The opacity at which the inner panel has its original alpha (0xC8). */
+    private const val PANEL_REF_OPACITY = 84f
 
     private class Geo(val ox: Float, val oy: Float, w: Float, h: Float) {
         val sx = w / 240f
@@ -48,12 +56,15 @@ object WidgetRenderer {
 
     private fun Int.alpha(a: Int) = (this and 0x00FFFFFF) or (a shl 24)
 
-    fun render(ctx: Context, w: Int, h: Int, f: Frame): Bitmap {
+    /** Multiplies the colour's own alpha by k (0 = invisible). */
+    private fun Int.scaleAlpha(k: Float) = alpha(((this ushr 24) * k).roundToInt().coerceIn(0, 255))
+
+    fun render(ctx: Context, w: Int, h: Int, f: Frame, look: WidgetStyle = WidgetStyle()): Bitmap {
         val bmp = Bitmap.createBitmap(max(1, w), max(1, h), Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
         val wf = bmp.width.toFloat()
         val hf = bmp.height.toFloat()
-        drawGlass(c, wf, hf, f)
+        drawGlass(c, wf, hf, f, look)
 
         val pad = hf * 0.06f
         val g = Geo(pad, pad, wf - 2 * pad, hf - 2 * pad)
@@ -95,7 +106,8 @@ object WidgetRenderer {
         val ph = g.m(66f)
         val box = RectF(pl, pt, pl + pw, pt + ph)
         val radius = g.m(6f)
-        c.drawRoundRect(box, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.PANEL.alpha(0xC8) })
+        val panelAlpha = (0xC8 * look.opacity / PANEL_REF_OPACITY).roundToInt().coerceIn(0, 255)
+        c.drawRoundRect(box, radius, radius, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.PANEL.alpha(panelAlpha) })
         c.drawRoundRect(
             box, radius, radius,
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -161,7 +173,10 @@ object WidgetRenderer {
     // ------------------------------------------------------------------------
     //  Glass
     // ------------------------------------------------------------------------
-    private fun drawGlass(c: Canvas, w: Float, h: Float, f: Frame) {
+    private fun drawGlass(c: Canvas, w: Float, h: Float, f: Frame, look: WidgetStyle) {
+        val bottomA = (255 * look.opacity / 100f).roundToInt().coerceIn(0, 255)
+        val topA = (bottomA * TOP_RATIO).roundToInt().coerceIn(0, 255)
+        val k = look.glass.coerceIn(0, 100) / 100f
         val inset = max(1f, h * 0.01f)
         val r = RectF(inset, inset, w - inset, h - inset)
         val rad = min(w, h) * 0.17f
@@ -172,7 +187,7 @@ object WidgetRenderer {
         layer(
             LinearGradient(
                 0f, 0f, 0f, h,
-                intArrayOf(Palette.PANEL.alpha(GLASS_TOP_ALPHA), Palette.BG.alpha(GLASS_BOTTOM_ALPHA)),
+                intArrayOf(Palette.PANEL.alpha(topA), Palette.BG.alpha(bottomA)),
                 null, Shader.TileMode.CLAMP,
             ),
         )
@@ -180,7 +195,7 @@ object WidgetRenderer {
         layer(
             RadialGradient(
                 w * 0.12f, h * 0.02f, w * 0.65f,
-                intArrayOf(Palette.CYAN.alpha(0x30), Palette.CYAN.alpha(0)), null, Shader.TileMode.CLAMP,
+                intArrayOf(Palette.CYAN.scaleAlpha(0x30 / 255f * k), Palette.CYAN.alpha(0)), null, Shader.TileMode.CLAMP,
             ),
         )
         // Light from the bottom-right. It warms toward amber and red when a reading
@@ -192,14 +207,14 @@ object WidgetRenderer {
         layer(
             RadialGradient(
                 w * 0.96f, h, w * 0.55f,
-                intArrayOf(warm.alpha(0x34), warm.alpha(0)), null, Shader.TileMode.CLAMP,
+                intArrayOf(warm.scaleAlpha(0x34 / 255f * k), warm.alpha(0)), null, Shader.TileMode.CLAMP,
             ),
         )
         // Sheen across the top.
         layer(
             LinearGradient(
                 0f, 0f, 0f, h * 0.55f,
-                intArrayOf(0x2AFFFFFF, 0x00FFFFFF), null, Shader.TileMode.CLAMP,
+                intArrayOf(0x2AFFFFFF.scaleAlpha(k), 0x00FFFFFF), null, Shader.TileMode.CLAMP,
             ),
         )
         // Specular rim: bright where light enters, faint through the middle.
@@ -210,7 +225,10 @@ object WidgetRenderer {
                 strokeWidth = max(1.5f, h * 0.012f)
                 shader = LinearGradient(
                     0f, 0f, w, h,
-                    intArrayOf(0xA0FFFFFF.toInt(), 0x18FFFFFF, 0x10FFFFFF, 0x60FFFFFF),
+                    intArrayOf(
+                        0xA0FFFFFF.toInt().scaleAlpha(k), 0x18FFFFFF.scaleAlpha(k),
+                        0x10FFFFFF.scaleAlpha(k), 0x60FFFFFF.scaleAlpha(k),
+                    ),
                     floatArrayOf(0f, 0.35f, 0.7f, 1f), Shader.TileMode.CLAMP,
                 )
             },

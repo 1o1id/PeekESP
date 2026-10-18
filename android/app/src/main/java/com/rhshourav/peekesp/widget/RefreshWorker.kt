@@ -1,7 +1,6 @@
 package com.rhshourav.peekesp.widget
 
 import android.content.Context
-import androidx.glance.appwidget.updateAll
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -40,7 +39,7 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
             FetchResult.AuthRejected -> cache.saveAuthRejected()
             is FetchResult.Failed -> cache.saveFailed()
         }
-        PeekWidget().updateAll(app)
+        redrawWidgets(app)
         return Result.success()
     }
 

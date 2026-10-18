@@ -15,11 +15,15 @@ import android.os.PersistableBundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -30,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -40,11 +45,14 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -53,7 +61,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -61,6 +74,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -71,23 +85,31 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.glance.appwidget.updateAll
 import com.rhshourav.peekesp.data.FetchResult
+import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.Pairing
 import com.rhshourav.peekesp.data.RelayClient
 import com.rhshourav.peekesp.data.RelayConfig
 import com.rhshourav.peekesp.data.Setup
 import com.rhshourav.peekesp.data.SetupStore
+import com.rhshourav.peekesp.data.StyleStore
 import com.rhshourav.peekesp.data.WidgetCache
+import com.rhshourav.peekesp.data.WidgetStyle
+import com.rhshourav.peekesp.widget.Frame
+import com.rhshourav.peekesp.widget.Link
 import com.rhshourav.peekesp.widget.Palette
-import com.rhshourav.peekesp.widget.PeekWidget
 import com.rhshourav.peekesp.widget.PeekWidgetReceiver
 import com.rhshourav.peekesp.widget.RefreshWorker
+import com.rhshourav.peekesp.widget.WidgetRenderer
+import com.rhshourav.peekesp.widget.redrawWidgets
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.roundToInt
 
 /** Credit and project home. */
 private const val AUTHOR = "rhshourav"
@@ -128,7 +150,7 @@ private data class Notice(val text: String, val tone: Tone = Tone.INFO)
 
 private fun Tone.color(): Color = Color(
     when (this) {
-        Tone.INFO -> Palette.DIM
+        Tone.INFO -> Palette.CYAN
         Tone.OK -> Palette.GREEN
         Tone.WARN -> Palette.AMBER
         Tone.ERROR -> Palette.RED
@@ -140,6 +162,7 @@ private fun Screen() {
     val ctx = LocalContext.current
     val store = remember { SetupStore(ctx) }
     val cache = remember { WidgetCache(ctx) }
+    val styleStore = remember { StyleStore(ctx) }
     val scope = rememberCoroutineScope()
 
     var setup by remember { mutableStateOf(store.load().firstOrNull()) }
@@ -151,7 +174,6 @@ private fun Screen() {
     var revealed by remember { mutableStateOf(false) }
     var confirmForget by remember { mutableStateOf(false) }
     var showRelay by rememberSaveable { mutableStateOf(false) }
-    // Re-read after the relay dialog closes so the label below stays truthful.
     var relay by remember { mutableStateOf(RelayConfig.get(ctx)) }
 
     /**
@@ -226,7 +248,7 @@ private fun Screen() {
                     }
                 }
             }
-            PeekWidget().updateAll(ctx)
+            redrawWidgets(ctx)
             busy = false
         }
     }
@@ -237,56 +259,69 @@ private fun Screen() {
             .background(Color(Palette.BG))
             .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(24.dp),
+            .padding(horizontal = 20.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text("PeekESP", style = MaterialTheme.typography.headlineMedium, color = Color(Palette.CYAN))
-
         val current = setup
-        if (current == null) {
-            ModeToggle(mode = mode, enabled = !busy, onChange = { mode = it; notice = null })
-            when (mode) {
-                Mode.ENTER -> EnterCodeForm(
-                    input = input,
-                    busy = busy,
-                    onInput = { input = Pairing.normalise(it).take(Pairing.CODE_LEN) },
-                    onSubmit = { if (Pairing.isValid(input)) connect(input, created = false) },
-                )
-                Mode.CREATE -> CreateCodeForm(
-                    code = draft,
-                    busy = busy,
-                    onRegenerate = { draft = Pairing.generate() },
-                    onCopy = { copyCode(ctx, draft); notice = Notice("Code copied.", Tone.OK) },
-                    onShare = { shareCode(ctx, draft) },
-                    onUse = { connect(draft, created = true) },
+
+        Header(paired = current != null)
+        notice?.let { NoticeBanner(it) }
+
+        // ---- 1. Setup ----
+        SectionCard(
+            title = if (current == null) "Connect a machine" else "Your setup",
+            subtitle = if (current == null) "Pair this phone with a device or agent." else null,
+        ) {
+            if (current == null) {
+                ModeToggle(mode = mode, enabled = !busy, onChange = { mode = it; notice = null })
+                when (mode) {
+                    Mode.ENTER -> EnterCodeForm(
+                        input = input,
+                        busy = busy,
+                        onInput = { input = Pairing.normalise(it).take(Pairing.CODE_LEN) },
+                        onSubmit = { if (Pairing.isValid(input)) connect(input, created = false) },
+                    )
+                    Mode.CREATE -> CreateCodeForm(
+                        code = draft,
+                        busy = busy,
+                        onRegenerate = { draft = Pairing.generate() },
+                        onCopy = { copyCode(ctx, draft); notice = Notice("Code copied.", Tone.OK) },
+                        onShare = { shareCode(ctx, draft) },
+                        onUse = { connect(draft, created = true) },
+                    )
+                }
+            } else {
+                PairedPanel(
+                    code = current.code,
+                    revealed = revealed,
+                    onToggleReveal = { revealed = !revealed },
+                    onCopy = { copyCode(ctx, current.code); notice = Notice("Code copied.", Tone.OK) },
+                    onShare = { shareCode(ctx, current.code) },
+                    onRefresh = {
+                        RefreshWorker.refreshNow(ctx)
+                        notice = Notice("Refreshing the widget\u2026")
+                    },
+                    onForget = { confirmForget = true },
                 )
             }
-        } else {
-            PairedPanel(
-                code = current.code,
-                revealed = revealed,
-                onToggleReveal = { revealed = !revealed },
-                onCopy = { copyCode(ctx, current.code); notice = Notice("Code copied.", Tone.OK) },
-                onShare = { shareCode(ctx, current.code) },
-                onRefresh = {
-                    RefreshWorker.refreshNow(ctx)
-                    notice = Notice("Refreshing the widget\u2026")
-                },
-                onForget = { confirmForget = true },
-            )
         }
 
-        notice?.let {
-            Text(
-                it.text,
-                color = it.tone.color(),
-                style = MaterialTheme.typography.bodyMedium,
-                // TalkBack announces status changes without the user hunting for them.
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            )
+        // ---- 2. Widget look ----
+        SectionCard(
+            title = "Widget look",
+            subtitle = "Changes reach your home screen automatically.",
+        ) {
+            LookPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
         }
 
-        RelayRow(relay = relay, custom = relay != RelayConfig.DEFAULT_BASE, onEdit = { showRelay = true })
+        // ---- 3. Relay ----
+        SectionCard(
+            title = "Relay",
+            subtitle = "The server your phone and your agents meet at.",
+        ) {
+            RelayPanel(relay = relay, custom = relay != RelayConfig.DEFAULT_BASE, onEdit = { showRelay = true })
+        }
+
         AboutFooter(ctx)
     }
 
@@ -308,14 +343,13 @@ private fun Screen() {
                     revealed = false
                     draft = Pairing.generate()
                     notice = Notice("Setup forgotten.")
-                    scope.launch { PeekWidget().updateAll(ctx) }
+                    scope.launch { redrawWidgets(ctx) }
                 }) { Text("Forget", color = Color(Palette.RED)) }
             },
             dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Keep") } },
         )
     }
 
-    // Its own block: it must not depend on the "forget" dialog being open.
     if (showRelay) {
         RelayDialog(
             onDismiss = { showRelay = false },
@@ -332,19 +366,247 @@ private fun Screen() {
 }
 
 // ----------------------------------------------------------------------------
-//  Relay address
+//  Layout building blocks
 // ----------------------------------------------------------------------------
 
 @Composable
-private fun RelayRow(relay: String, custom: Boolean, onEdit: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        Text(
-            if (custom) "Relay (custom): $relay" else "Relay: $relay",
-            style = MaterialTheme.typography.bodySmall,
-            color = Color(Palette.DIM),
-        )
-        TextButton(onClick = onEdit) { Text("Relay address") }
+private fun Header(paired: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Column {
+            Text(
+                "PeekESP",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                color = Color(Palette.CYAN),
+            )
+            Text(
+                "Live stats from your machines",
+                style = MaterialTheme.typography.bodyMedium,
+                color = Color(Palette.DIM),
+            )
+        }
+        StatusChip(paired)
     }
+}
+
+@Composable
+private fun StatusChip(paired: Boolean) {
+    val tone = Color(if (paired) Palette.GREEN else Palette.AMBER)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .background(tone.copy(alpha = 0.14f), RoundedCornerShape(50))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+    ) {
+        Box(Modifier.size(8.dp).background(tone, CircleShape))
+        Spacer(Modifier.width(8.dp))
+        Text(
+            if (paired) "Paired" else "Not paired",
+            style = MaterialTheme.typography.labelLarge,
+            color = tone,
+        )
+    }
+}
+
+/** Status line under the header. TalkBack announces changes without the user hunting for them. */
+@Composable
+private fun NoticeBanner(n: Notice) {
+    val tone = n.tone.color()
+    Surface(
+        color = tone.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, tone.copy(alpha = 0.45f)),
+        modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite },
+    ) {
+        Text(
+            n.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = Color(Palette.TEXT),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+        )
+    }
+}
+
+/** Every section looks the same: a card, a title, an optional one-line explanation, then content. */
+@Composable
+private fun SectionCard(
+    title: String,
+    subtitle: String? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Surface(
+        color = Color(Palette.PANEL),
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, Color(Palette.TRACK)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(Palette.TEXT),
+                )
+                if (subtitle != null) {
+                    Text(
+                        subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(Palette.DIM),
+                    )
+                }
+            }
+            content()
+        }
+    }
+}
+
+// ----------------------------------------------------------------------------
+//  Widget look
+// ----------------------------------------------------------------------------
+
+/** Made-up readings, so the preview works before anything is paired. */
+private val SAMPLE_FRAME = Frame(
+    machine = Machine(
+        host = "preview", ageS = 2, cpu = 42.0, ram = 61.0, storagePct = 58.0,
+        storageTotalGb = 512.0, storageFreeGb = 215.0, tempC = 48.0,
+        batteryPct = null, batteryMin = null, charging = false, ac = false,
+        rxKbps = 1331.0, txKbps = 113.0, uptimeS = 3 * 86400L + 4 * 3600,
+    ),
+    index = 0, count = 2, sinceFetchS = 0, offline = false, link = Link.OK, latencyMs = 42,
+)
+
+@Composable
+private fun LookPanel(store: StyleStore, onApply: () -> Unit) {
+    val ctx = LocalContext.current
+    var look by remember { mutableStateOf(store.read()) }
+    var applied by remember { mutableStateOf(look) }
+
+    // The same renderer the widget uses, so what you see here is what the home screen gets.
+    val preview = remember(look) {
+        WidgetRenderer.render(ctx, 640, 360, SAMPLE_FRAME, look).asImageBitmap()
+    }
+
+    // Auto-sync: a short pause after the last movement, then the widget redraws.
+    // Restarting on every change is the debounce.
+    LaunchedEffect(look) {
+        if (look != applied) {
+            delay(250)
+            applied = look
+            onApply()
+        }
+    }
+
+    // A bright, busy backdrop so transparency is easy to judge.
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(Brush.linearGradient(listOf(Color(0xFF3A1C71), Color(0xFFD76D77), Color(0xFFFFAF7B))))
+            .drawBehind {
+                drawCircle(Color(0x66FFFFFF), size.minDimension * 0.35f, Offset(size.width * 0.15f, size.height * 0.2f))
+                drawCircle(Color(0x5500E5FF), size.minDimension * 0.40f, Offset(size.width * 0.85f, size.height * 0.85f))
+            }
+            .padding(12.dp),
+    ) {
+        Image(
+            bitmap = preview,
+            contentDescription = "Preview of the widget with these settings",
+            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+        )
+    }
+
+    StyleSlider(
+        label = "Background opacity",
+        value = look.opacity,
+        onChange = { look = look.copy(opacity = it); store.save(look) },
+    )
+    StyleSlider(
+        label = "Glass effect",
+        value = look.glass,
+        onChange = { look = look.copy(glass = it); store.save(look) },
+    )
+
+    Text(
+        "Lower opacity shows more of your wallpaper but can make text hard to read on bright " +
+            "backgrounds. Android cannot blur what is behind a widget, so the glass effect is " +
+            "lighting only: corner light, sheen and rim.",
+        style = MaterialTheme.typography.bodySmall,
+        color = Color(Palette.DIM),
+    )
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        TextButton(
+            onClick = { look = WidgetStyle(); store.save(look) },
+            enabled = look != WidgetStyle(),
+        ) { Text("Reset to defaults") }
+    }
+}
+
+@Composable
+private fun StyleSlider(label: String, value: Int, onChange: (Int) -> Unit) {
+    Column {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "$value%",
+                style = MaterialTheme.typography.bodyLarge,
+                fontFamily = FontFamily.Monospace,
+                color = Color(Palette.DIM),
+            )
+        }
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onChange(it.roundToInt()) },
+            valueRange = 0f..100f,
+            colors = SliderDefaults.colors(inactiveTrackColor = Color(Palette.TRACK)),
+            modifier = Modifier.semantics {
+                contentDescription = label
+                stateDescription = "$value percent"
+            },
+        )
+    }
+}
+
+// ----------------------------------------------------------------------------
+//  Relay
+// ----------------------------------------------------------------------------
+
+@Composable
+private fun RelayPanel(relay: String, custom: Boolean, onEdit: () -> Unit) {
+    val host = remember(relay) { Uri.parse(relay).host ?: relay }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                host,
+                style = MaterialTheme.typography.bodyLarge,
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                if (custom) "Custom relay" else "Default relay",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(if (custom) Palette.AMBER else Palette.DIM),
+            )
+        }
+        OutlinedButton(onClick = onEdit) { Text("Change") }
+    }
+    Text(
+        "Only change this if you run your own PeekESP relay. Your agents and devices must push to the same one.",
+        style = MaterialTheme.typography.bodySmall,
+        color = Color(Palette.DIM),
+    )
 }
 
 @Composable
@@ -357,15 +619,15 @@ private fun RelayDialog(onDismiss: () -> Unit, onChanged: (String) -> Unit) {
         onDismissRequest = onDismiss,
         title = { Text("Relay address") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "Only change this if you run your own PeekESP relay. " +
-                        "Your agents and devices must push to the same relay.",
+                    "Where PeekESP reads your machines from. It must be an https:// address.",
+                    style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it; error = false },
-                    label = { Text("https://") },
+                    label = { Text("Relay address") },
                     isError = error,
                     supportingText = { if (error) Text("Enter an address starting with https://") },
                     singleLine = true,
@@ -376,31 +638,27 @@ private fun RelayDialog(onDismiss: () -> Unit, onChanged: (String) -> Unit) {
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (text.trim().trimEnd('/') != RelayConfig.DEFAULT_BASE) {
+                    TextButton(onClick = { text = RelayConfig.DEFAULT_BASE; error = false }) {
+                        Text("Use the default address")
+                    }
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                if (RelayConfig.save(ctx, text)) {
+                val clean = RelayConfig.clean(text)
+                if (clean == null) {
+                    error = true
+                } else {
+                    if (clean == RelayConfig.DEFAULT_BASE) RelayConfig.reset(ctx) else RelayConfig.save(ctx, clean)
                     RefreshWorker.refreshNow(ctx)
                     onChanged(RelayConfig.get(ctx))
                     onDismiss()
-                } else {
-                    error = true
                 }
             }) { Text("Save") }
         },
-        dismissButton = {
-            Row {
-                TextButton(onClick = {
-                    RelayConfig.reset(ctx)
-                    RefreshWorker.refreshNow(ctx)
-                    text = RelayConfig.get(ctx)
-                    error = false
-                    onChanged(text)
-                }) { Text("Reset to default") }
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-            }
-        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
 
@@ -411,7 +669,7 @@ private fun RelayDialog(onDismiss: () -> Unit, onChanged: (String) -> Unit) {
 @Composable
 private fun AboutFooter(ctx: Context) {
     Column(
-        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -448,7 +706,7 @@ private fun ModeToggle(mode: Mode, enabled: Boolean, onChange: (Mode) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .selectableGroup()
-            .background(Color(Palette.PANEL), RoundedCornerShape(14.dp))
+            .background(Color(Palette.BG), RoundedCornerShape(14.dp))
             .padding(4.dp),
     ) {
         @Composable
@@ -492,7 +750,7 @@ private fun EnterCodeForm(
     val bad = input.filter { it !in Pairing.ALPHABET }.toSet()
     val valid = Pairing.isValid(input)
 
-    Text("Enter the code your PeekESP device or agent shows.", style = MaterialTheme.typography.bodyLarge)
+    Text("Enter the code your PeekESP device or agent shows.", style = MaterialTheme.typography.bodyMedium)
     OutlinedTextField(
         value = input,
         onValueChange = onInput,
@@ -534,7 +792,7 @@ private fun CreateCodeForm(
     Text(
         "Make a new code, then enter it on the device or agent you want to watch. " +
             "It works in either order.",
-        style = MaterialTheme.typography.bodyLarge,
+        style = MaterialTheme.typography.bodyMedium,
     )
     CodeBlock(code = code, revealed = true)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -565,7 +823,6 @@ private fun PairedPanel(
     onForget: () -> Unit,
 ) {
     val ctx = LocalContext.current
-    Text("Paired", style = MaterialTheme.typography.titleMedium, color = Color(Palette.GREEN))
 
     // The code is the credential: masked by default, shown on request.
     CodeBlock(code = code, revealed = revealed)
@@ -586,7 +843,10 @@ private fun PairedPanel(
             modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
         ) { Text("Add widget to home screen") }
     } else {
-        Text("Long-press the home screen, choose Widgets, then PeekESP.")
+        Text(
+            "Long-press the home screen, choose Widgets, then PeekESP.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
     OutlinedButton(onClick = onRefresh, modifier = Modifier.fillMaxWidth()) { Text("Refresh widget now") }
     TextButton(onClick = onForget, modifier = Modifier.fillMaxWidth()) {
@@ -619,8 +879,8 @@ private fun CodeBlock(code: String, revealed: Boolean) {
     val spoken = if (revealed) "Pairing code: " + Pairing.normalise(code).toList().joinToString(" ")
     else "Pairing code, hidden"
     Surface(
-        color = Color(Palette.PANEL),
-        shape = RoundedCornerShape(16.dp),
+        color = Color(Palette.BG),                    // darker than the card around it
+        shape = RoundedCornerShape(14.dp),
         border = BorderStroke(1.dp, Color(Palette.TRACK)),
         modifier = Modifier.fillMaxWidth().clearAndSetSemantics { contentDescription = spoken },
     ) {
@@ -633,7 +893,7 @@ private fun CodeBlock(code: String, revealed: Boolean) {
             color = Color(if (revealed) Palette.CYAN else Palette.DIM),
             textAlign = TextAlign.Center,
             maxLines = 1,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 28.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 24.dp),
         )
     }
 }

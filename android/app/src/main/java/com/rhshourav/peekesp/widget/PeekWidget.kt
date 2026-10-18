@@ -3,6 +3,8 @@ package com.rhshourav.peekesp.widget
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
@@ -12,16 +14,40 @@ import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
 import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.provideContent
-import androidx.glance.appwidget.updateAll
+import androidx.glance.appwidget.state.updateAppWidgetState
+import androidx.glance.currentState
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.fillMaxSize
+import com.rhshourav.peekesp.data.StyleStore
 import com.rhshourav.peekesp.data.WidgetCache
 import kotlin.math.sqrt
+
+/** Bumped by [redrawWidgets]. The composition reads it, so a bump always forces a redraw. */
+private val REV = longPreferencesKey("rev")
+
+/**
+ * Redraws every placed widget from the current cache and look settings.
+ *
+ * Glance keeps a widget's composition alive for a while after an update, and a
+ * plain update() does not re-run code that read its inputs once inside
+ * remember {}. Writing a new revision into the widget's own state makes the
+ * composition depend on something that really changed. Use this instead of
+ * updateAll() everywhere.
+ */
+suspend fun redrawWidgets(context: Context) {
+    val widget = PeekWidget()
+    val rev = System.currentTimeMillis()
+    for (id in GlanceAppWidgetManager(context).getGlanceIds(PeekWidget::class.java)) {
+        updateAppWidgetState(context, id) { it[REV] = rev }
+        widget.update(context, id)
+    }
+}
 
 /** The home-screen widget: one machine, drawn like the device's own screen. */
 class PeekWidget : GlanceAppWidget() {
@@ -38,6 +64,7 @@ class PeekWidget : GlanceAppWidget() {
         val ctx = LocalContext.current
         val size = LocalSize.current
         val density = ctx.resources.displayMetrics.density
+        val rev = currentState<Preferences>()[REV] ?: 0L
 
         // RemoteViews has a bitmap memory ceiling; stay far below it.
         var w = (size.width.value * density).toInt().coerceAtLeast(1)
@@ -48,8 +75,9 @@ class PeekWidget : GlanceAppWidget() {
             h = (h * k).toInt().coerceAtLeast(1)
         }
 
-        val frame = remember { FrameBuilder.build(ctx, System.currentTimeMillis()) }
-        val bitmap = remember(w, h) { WidgetRenderer.render(ctx, w, h, frame) }
+        val frame = remember(rev) { FrameBuilder.build(ctx, System.currentTimeMillis()) }
+        val look = remember(rev) { StyleStore(ctx).read() }
+        val bitmap = remember(w, h, rev) { WidgetRenderer.render(ctx, w, h, frame, look) }
 
         Image(
             provider = ImageProvider(bitmap),
@@ -83,7 +111,7 @@ class PeekWidgetReceiver : GlanceAppWidgetReceiver() {
 class NextMachineAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         WidgetCache(context).advance()
-        PeekWidget().updateAll(context)
+        redrawWidgets(context)
         RefreshWorker.refreshNow(context)
     }
 }
