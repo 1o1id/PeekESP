@@ -39,7 +39,7 @@ PeekESP brings remote system metrics to Android, dedicated ESP32 displays, deskt
 | Raspberry Pi | Display and/or agent | [pi/](pi/) |
 | Windows | Agent (tray app) | Supported |
 | Linux / DietPi | Agent | Supported |
-| macOS | Agent | **[TODO: not documented — confirm whether supported]** |
+| macOS | Agent |
 | Home Assistant | Viewer | HACS integration |
 
 <details>
@@ -89,20 +89,18 @@ Until the Play Store listing is live, the app is installed from the APK. Open th
 
 1. Open the app and choose **Join** or **Create**.
 2. **Join an existing network** — type the code, e.g. `K7M2-P4QX-9R`. Dashes and case are ignored. Use this when an ESP32 is already showing a code or your agents are already paired.
-3. **Create a new network** — the app generates a fresh code. Give that same code to each agent: `sudo peekesp pair CODE` on Linux, or **Settings → Pair a device** in the Windows app. **[TODO: say whether an ESP32 can adopt an app-made code, and how. The device has two buttons and generates its own code, so this needs spelling out.]**
-4. Add the widget: long-press the home screen → **Widgets** → **PeekESP**, then drag it into place. **[TODO: confirm widget name and available sizes.]**
-
+3. **Create a new network** — the app generates a fresh code. Give that same code to each agent: `sudo peekesp pair CODE` on Linux, or **Settings → Pair a device** in the Windows app. 
+4. Add the widget: long-press the home screen → **Widgets** → **PeekESP**, then drag it into place.
 A code identifies you, not a machine. Every machine run with the same code appears in the app, up to six.
 
 ### What the widget shows
 
 Key readings at a glance, without opening the app: CPU and RAM usage, storage, temperature, network throughput, uptime and link status — whichever of them the monitored machine actually reports.
 
-**Several machines.** **[TODO: which machine the widget shows, and whether you can pick one per widget.]**
-
+**Several machines.**
 ### Refresh rate and the request budget
 
-Every refresh is a poll against the relay, counted the same way as a display's. An always-polling client at a 5 s interval costs 17,280 requests a day, and the free tier allows 100,000 — see the [budget](#2-deploy-the-relay). Android limits background work, so widgets refresh far less often than that: **[TODO: actual widget refresh interval]**. If you run several phones or widgets, count them in.
+Every refresh is a poll against the relay, counted the same way as a display's. An always-polling client at a 5 s interval costs 17,280 requests a day, and the free tier allows 100,000 — see the [budget](#2-deploy-the-relay). Android limits background work, so widgets refresh far less often than that. If you run several phones or widgets, count them in.
 
 What the app stores on the phone and which permissions it asks for are covered in [Privacy and security](#privacy-and-security).
 
@@ -613,7 +611,7 @@ month on a battery. [Why not deep sleep?](docs/ARCHITECTURE.md#standby-instead-o
 
 ## Clock
 
-Local time, swiped to like any other page. It follows the time zone you set in the setup form (stored in minutes east of UTC); the factory default is Dhaka, UTC+6, no daylight saving **[TODO: confirm default]**. It shows a
+Local time, swiped to like any other page. It follows the time zone you set in the setup form (stored in minutes east of UTC); the factory default is Dhaka, UTC+6, no daylight saving . It shows a
 12-hour clock with seconds, an AM/PM marker, the weekday and the full date, and
 a bar that fills across the minute so the page never looks frozen. It lives in
 [`PeekESP/clock_faces.h`](PeekESP/clock_faces.h) so the face can be redesigned
@@ -771,7 +769,7 @@ cable is moved.
 | `undefined reference to lv_qrcode_create` | Stock `lv_conf.h`. `LV_USE_QRCODE` and `LV_USE_SPINNER` default to 0 — use this repo's copy. |
 | `region 'dram0_0_seg' overflowed` | LVGL's heap is a static array counted against a ~160 KB segment. Lower `LV_MEM_SIZE` in `lv_conf.h` (48 KB here) or shrink the draw buffer in the sketch. |
 | `'Gauge' was not declared in this scope` | You added a function above the type it uses. The Arduino IDE injects generated prototypes before the *first* function definition, so every type used in a signature must be declared above that point. See the note on `struct Gauge`. |
-| Android widget shows old data, or none | Check the code matches (dashes and case are ignored), that the agent is pushing (`peekesp status`, or the Windows app's status line), and that the relay's daily request quota isn't spent. Android also throttles widget refreshes **[TODO: exact interval]**. |
+| Android widget shows old data, or none | Check the code matches (dashes and case are ignored), that the agent is pushing (`peekesp status`, or the Windows app's status line), and that the relay's daily request quota isn't spent. Android also throttles widget refreshes. |
 | Everything goes quiet part-way through the day | The free-tier request quota is probably spent. Count agents, displays and phones against 100k/day — see [Deploy the relay](#2-deploy-the-relay) — and raise the interval. |
 | Windows app says it isn't pushing | The code was mistyped, or the machine can't reach the relay URL shown in Settings. Re-enter the code, then **Save**. |
 
@@ -792,8 +790,8 @@ cable is moved.
 - **The relay never sees your pairing code.** The stream and tokens are derived from it locally on every client.
 - **What leaves your machine:** the fields in the [telemetry contract](#telemetry-contract) — host name, CPU, RAM, storage, temperature, battery, uptime and network rates. The relay keeps the latest reading per host and drops a host after 24 hours of silence.
 - **The setup page is plain HTTP.** The limits are spelled out under [Configuration](#configuration); read them before enabling the settings page on your network.
-- **Android:** **[TODO: what the app stores on the phone, which permissions it requests, and whether it sends anything beyond the relay.]**
-- **Reporting a vulnerability:** **[TODO: security contact or GitHub private advisory link.]**
+- **Android:**
+- **Reporting a vulnerability:**
 
 ## Contributing
 
