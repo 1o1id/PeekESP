@@ -4,12 +4,14 @@
 
 # PeekESP
 
-**A physical system-metrics dashboard for a remote Linux box.**
+**Cross-platform system monitoring — from Android home-screen widgets to dedicated ESP32 displays.**
 
 ![board](https://img.shields.io/badge/board-TTGO_T--Display-00E5FF?style=flat-square)
 ![build](https://img.shields.io/badge/build-Arduino_IDE_%7C_PlatformIO-8CC63F?style=flat-square)
 ![ui](https://img.shields.io/badge/UI-LVGL_8.3-FF2E7E?style=flat-square)
 ![license](https://img.shields.io/badge/license-MIT-5C6B82?style=flat-square)
+![worker CI](https://img.shields.io/github/actions/workflow/status/rhshourav/PeekESP/cloudflare-worker.yml?style=flat-square&label=worker%20CI)
+![release](https://img.shields.io/github/v/release/rhshourav/PeekESP?style=flat-square&color=8CC63F)
 
 <img src="img/dashboard.jpeg" alt="PeekESP running on a TTGO T-Display, showing CPU, RAM, storage and network for a machine called Cryo-PC" width="720">
 
@@ -17,11 +19,96 @@
 
 </div>
 
-An ESP32 (LilyGO TTGO T-Display) monitors a remote Linux or Windows machine,
-polling every few seconds and sweeping the readings into place with 500 ms eased
-animations rather than snapping.
+PeekESP brings remote system metrics to Android, dedicated ESP32 displays, desktop hosts, Raspberry Pi displays, and Home Assistant. Monitor CPU, memory, storage, temperature, uptime, and network throughput across your devices — without making the ESP32 the only way to use PeekESP.
+
+## Choose your path
+
+| I want to… | Start here |
+|---|---|
+| Check a machine from my phone | [Android app](#android-app) |
+| Build the ESP32 desk display | [Quick start](#quick-start) |
+| Use a Raspberry Pi and a small screen | [Raspberry Pi](#a-raspberry-pi-instead-of-an-esp32) |
+| See machines in Home Assistant | [Home Assistant](#home-assistant) |
+| Monitor one more machine | [Setup → the agent](#1-on-the-host--the-telemetry-agent) |
+
+| Platform | Role | Status |
+|---|---|---|
+| Android | Viewer — app and home-screen widget | [Android app](#android-app) |
+| ESP32, TTGO T-Display | Display | Verified on hardware |
+| ESP32, other panels | Display | Compiles and links; not yet run on hardware |
+| Raspberry Pi | Display and/or agent | [pi/](pi/) |
+| Windows | Agent (tray app) | Supported |
+| Linux / DietPi | Agent | Supported |
+| macOS | Agent | **[TODO: not documented — confirm whether supported]** |
+| Home Assistant | Viewer | HACS integration |
+
+<details>
+<summary><b>Contents</b></summary>
+
+- [Android app](#android-app)
+- [Quick start](#quick-start)
+- [What's in here](#whats-in-here)
+- [Architecture](#architecture)
+- [Why a relay](#why-a-relay)
+- [Get it](#get-it)
+- [Setup](#setup)
+- [Other screens, other hosts](#other-screens-other-hosts)
+- [Configuration](#configuration)
+- [Changing the boot logo](#changing-the-boot-logo)
+- [Buttons](#buttons)
+- [Clock](#clock)
+- [Power screen](#power-screen)
+- [Telemetry contract](#telemetry-contract)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Privacy and security](#privacy-and-security)
+- [Contributing](#contributing)
+- [License](#license)
+
+</details>
+
+## Android app
+
+<div align="center">
+<img src="img/android-widget.png" alt="The PeekESP home-screen widget showing CPU, RAM and link status" width="320">
+</div>
+
+PeekESP for Android is a viewer — an app plus a home-screen widget — and it works **with or without an ESP32**. It reads the same relay as every other client, so a phone, a desk display and Home Assistant can all watch the same machines at once.
+
+| | |
+|---|---|
+| **Download** | The `.apk` under **Assets** on the [latest release](https://github.com/rhshourav/PeekESP/releases/latest) · Google Play: coming soon |
+| **Requires** | Android 8.1 (API 27) or newer |
+| **Also needs** | A PeekESP network code, and at least one machine running the [agent](#1-on-the-host--the-telemetry-agent) |
+
+Until the Play Store listing is live, the app is installed from the APK. Open the latest release, expand **Assets** and download the `.apk`. Android will ask you to allow *Install unknown apps* for whichever app opened the file (your browser or file manager); switch that permission off again afterwards.
+
+
+
+### Get started
+
+1. Open the app and choose **Join** or **Create**.
+2. **Join an existing network** — type the code, e.g. `K7M2-P4QX-9R`. Dashes and case are ignored. Use this when an ESP32 is already showing a code or your agents are already paired.
+3. **Create a new network** — the app generates a fresh code. Give that same code to each agent: `sudo peekesp pair CODE` on Linux, or **Settings → Pair a device** in the Windows app. **[TODO: say whether an ESP32 can adopt an app-made code, and how. The device has two buttons and generates its own code, so this needs spelling out.]**
+4. Add the widget: long-press the home screen → **Widgets** → **PeekESP**, then drag it into place. **[TODO: confirm widget name and available sizes.]**
+
+A code identifies you, not a machine. Every machine run with the same code appears in the app, up to six.
+
+### What the widget shows
+
+Key readings at a glance, without opening the app: CPU and RAM usage, storage, temperature, network throughput, uptime and link status — whichever of them the monitored machine actually reports.
+
+**Several machines.** **[TODO: which machine the widget shows, and whether you can pick one per widget.]**
+
+### Refresh rate and the request budget
+
+Every refresh is a poll against the relay, counted the same way as a display's. An always-polling client at a 5 s interval costs 17,280 requests a day, and the free tier allows 100,000 — see the [budget](#2-deploy-the-relay). Android limits background work, so widgets refresh far less often than that: **[TODO: actual widget refresh interval]**. If you run several phones or widgets, count them in.
+
+What the app stores on the phone and which permissions it asks for are covered in [Privacy and security](#privacy-and-security).
 
 ## Quick start
+
+This is the ESP32 + Windows route. Phone only? Jump to the [Android app](#android-app).
 
 ```bash
 python quickstart.py
@@ -42,7 +129,11 @@ sees it.
 Only planning to *change* the firmware? `python quickstart.py --dev` installs the
 Arduino toolchain and builds from source instead.
 
+<div align="center">
+  
 <img src="img/dashboard-angle.jpeg" alt="The dashboard seen at an angle on the desk" width="640">
+
+</div>
 
 Two arcs for CPU and RAM, a panel for temperature and throughput, a storage bar
 with the free space beside it, and a status line that names what the link is
@@ -52,6 +143,7 @@ doing rather than leaving you to guess.
 
 | Path | What it is |
 |---|---|
+| [android/](android/) | The Android app and home-screen widget. **[TODO: confirm folder name]** |
 | [PeekESP/PeekESP.ino](PeekESP/PeekESP.ino) | The firmware. Open this one in the Arduino IDE. |
 | [PeekESP/secrets.example.h](PeekESP/secrets.example.h) | Optional factory defaults. Real config happens on-device. |
 | [PeekESP/PANELS.md](PeekESP/PANELS.md) | Building for a different screen — ILI9341, ST7789, GC9A01 round, ST7735. |
@@ -70,6 +162,7 @@ doing rather than leaving you to guess.
 | [firmware/](firmware/) | The compiled firmware, ready to flash. No toolchain needed. |
 | [tools/flash.py](tools/flash.py) | Flashes it and opens the serial monitor. No IDE. |
 | [tools/export_firmware.py](tools/export_firmware.py) | Rebuilds that image after a firmware change. |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design notes: why the firmware is built the way it is. |
 
 ## Architecture
 
@@ -85,20 +178,11 @@ Two pinned FreeRTOS tasks that share nothing but a mutex-guarded struct:
   timeout, so even a contended lock just defers the update to the next tick
   rather than blocking the UI.
 
-The battery split matters more than it looks. Sixteen `analogRead` calls is a
-millisecond or two of blocking, and it used to run *inside* the LVGL timer —
-the one place on this device that must never block, because a frame missed
-there is a visible stutter mid-animation. Core 0 publishes four values; core 1
-formats them and draws.
-
-Core 1 also sleeps for however long `lv_timer_handler()` says the next timer is
-due, clamped to 2–30 ms, rather than a flat 5 ms. During an animation that is
-about as often as before; with nothing moving it is a handful of wakeups a
-second instead of two hundred.
-
-Values animate through `lv_anim_t` with `lv_anim_path_ease_out` over 500 ms. The
-gauges run on a 0–1000 range rather than 0–100 so a 3 % change still resolves
-into ~30 distinct steps and reads as a sweep, not a staircase.
+Two details worth knowing: battery sampling lives on core 0 so the UI thread never
+blocks on an ADC read, and core 1 sleeps for however long LVGL says the next timer
+is due (clamped to 2–30 ms) instead of a flat 5 ms. Gauges animate over 500 ms on a
+0–1000 range so small changes still read as a sweep. The reasoning is in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Why a relay
 
@@ -129,6 +213,7 @@ The relay has three modes, all on one deployment:
 | | |
 |---|---|
 | **This repository** | [Download ZIP](https://github.com/rhshourav/PeekESP/archive/refs/heads/main.zip) &middot; `git clone https://github.com/rhshourav/PeekESP.git` |
+| **Android app** | [Releases](https://github.com/rhshourav/PeekESP/releases) &middot; see [Android app](#android-app) |
 | **Windows app** | build it: `cd windows && python build.py` &rarr; `dist/PeekESP.exe` |
 | **Arduino IDE** | [arduino.cc/en/software](https://www.arduino.cc/en/software) |
 | **Python 3** | [python.org/downloads](https://www.python.org/downloads/) — needed only for the setup scripts and the agent |
@@ -227,6 +312,8 @@ or run it from source:
 python windows\peek_agent_win.py --once
 ```
 
+If Windows shows *Windows protected your PC* when you run a downloaded `PeekESP.exe`, the release isn't code-signed: choose **More info → Run anyway**, or build it yourself with `cd windows && python build.py`.
+
 Check it reads your machine correctly before wiring anything up — run it in the
 foreground and, from another shell:
 
@@ -262,10 +349,14 @@ Deploys can run themselves: add a `CLOUDFLARE_API_TOKEN` secret and the
 >
 > Requests are what you actually budget. At a 5-second interval each agent costs
 > 17,280 pushes/day and each display costs 17,280 polls/day, against a 100k/day
-> allowance. So **one display plus two machines fits; one display plus four does
-> not.** A display polls once no matter how many machines it shows — the cost is
-> per *agent*, not per screen you swipe to. Raising the interval to 15 s divides
-> everything by three.
+> allowance. So **one display plus four machines fits (86,400); a fifth tips it over
+> (103,680).** Every phone or widget that polls counts as another display. A display
+> polls once no matter how many machines it shows — the cost is per *agent*, not per
+> screen you swipe to. Raising the interval to 15 s divides everything by three.
+>
+> The limit of six machines per code comes from the relay, not the free tier: six
+> agents plus one display is 120,960 requests a day at 5 s, or 40,320 at 15 s. Past
+> four machines, raise the interval.
 
 ### 3. Pair the device
 
@@ -288,9 +379,9 @@ service, so there is nothing to do here. On Windows the tray app's **Start
 automatically when I sign in** does the same with no service to install.
 
 **Run the same command on every machine you want to watch, with the same code.**
-A pairing code identifies you, not a machine: a Windows box, a Mac and a DietPi
+A pairing code identifies you, not a machine: a Windows box, a Linux laptop and a DietPi
 sharing one code all appear on the display, and the left button swipes between
-them. Six per code.
+them. Six per code — see the [request budget](#2-deploy-the-relay) before adding many.
 
 ### 4. Flashing the ESP32
 
@@ -331,7 +422,7 @@ Huge APP (3MB No OTA/1MB SPIFFS)*.
 
 ### 4b. Flashing the ESP32 — PlatformIO
 
-Steps 3 and 5 are unnecessary; `platformio.ini` supplies the TFT_eSPI pinout and
+You can skip the two manual edits in [Get it](#get-it) (`User_Setup_Select.h` and `lv_conf.h`): `platformio.ini` supplies the TFT_eSPI pinout and
 the LVGL config path as build flags, which is why PlatformIO never had the
 `User_Setup_Select.h` problem in the first place. Then:
 
@@ -343,7 +434,7 @@ pio run -t upload -t monitor
 
 The T-Display is the default, not the only option. Everything below reads the
 same relay with the same pairing code, so they can all run at once — a device
-in Kushtia, one on your desk, and Home Assistant watching both.
+at a relative's place, one on your desk, and Home Assistant watching both.
 
 ### A different screen on the ESP32
 
@@ -355,10 +446,10 @@ python tools/flash.py --panel ili9341-320x240    # 2.4"/2.8" colour TFT
 python tools/flash.py --panel st7789-240x240     # 1.3" square
 ```
 
-Seven panels, one image each — TFT_eSPI decides its driver, pins and geometry
+One image per panel — TFT_eSPI decides its driver, pins and geometry
 at compile time, so a firmware image drives exactly one screen and the
 T-Display's image shows nothing on a GC9A01. The dashboard's layout is derived
-from the panel's dimensions rather than hardcoded, so adding an eighth is a
+from the panel's dimensions rather than hardcoded, so adding another is a
 build flag and not a redraw.
 
 To build them yourself: `python tools/build_panels.py`. Full list, wiring, and
@@ -509,36 +600,20 @@ Both buttons do two things, chosen by how long you hold them.
 
 Swiping costs nothing: one poll already carried every machine and the power
 page is local, so the device makes the same number of requests whether you look
-at one screen or at seven.
+at one screen or at all of them.
 
-> **Standby, not deep sleep.** Deep sleep on an ESP32 ends in a *reset*: the
-> chip comes back through `setup()`, rejoins WiFi, re-syncs NTP and lands on
-> the first page — so "wake" meant "reboot and lose your place". Standby keeps
-> RAM, the WiFi association and the page you were on, and wakes instantly.
->
-> The cost is real and worth stating: standby draws milliamps where deep sleep
-> draws microamps. But the backlight dominates this board's consumption by a
-> wide margin, and turning that off plus pausing the polling is most of the
-> saving. For a mains-powered desk gadget that is the right trade; for a month
-> on a battery it would not be.
->
-> (The earlier deep-sleep implementation also could not be woken at all, because
-> GPIO 0 is a strapping pin — held low across the reset that ends deep sleep,
-> the ESP32 latches it and comes up in the serial bootloader instead of running
-> the sketch.)
+**Standby, not deep sleep.** Standby keeps RAM, the WiFi association and the page you
+were on, so waking is instant and you don't lose your place. The cost: it draws
+milliamps rather than microamps, which suits a mains-powered desk gadget but not a
+month on a battery. [Why not deep sleep?](docs/ARCHITECTURE.md#standby-instead-of-deep-sleep)
 
 ## Clock
 
-Dhaka time (UTC+6, no daylight saving), swiped to like any other page: a
+Local time, swiped to like any other page. It follows the time zone you set in the setup form (stored in minutes east of UTC); the factory default is Dhaka, UTC+6, no daylight saving **[TODO: confirm default]**. It shows a
 12-hour clock with seconds, an AM/PM marker, the weekday and the full date, and
 a bar that fills across the minute so the page never looks frozen. It lives in
 [`PeekESP/clock_faces.h`](PeekESP/clock_faces.h) so the face can be redesigned
 without reading past a thousand lines of networking.
-
-There was briefly a second, time-only face. It went because it earned a whole
-page of the carousel to show strictly less than the page beside it, and every
-extra page is another button press between you and the machine you actually
-wanted to look at.
 
 The time comes from the NTP sync the TLS handshake needed anyway. The board has
 no battery-backed RTC — the internal one keeps counting between syncs but
@@ -553,11 +628,9 @@ and you land on it: the board's own charge level and voltage, whether something
 is holding it up, and — on the line below — the battery of whichever machine you
 were just looking at.
 
-It does not appear on its own. An earlier version raised it whenever the charge
-state changed, which on a board whose voltage sits near the threshold meant it
-reappeared every couple of seconds over the top of whatever you were reading.
-The state now needs to climb past 4.32 V to count as charging and fall below
-4.20 V to stop, so a reading that wobbles inside that band changes nothing.
+It never appears on its own. Charging uses hysteresis: the state has to climb past
+4.32 V to count as charging and fall below 4.20 V to stop, so a reading that wobbles
+inside that band changes nothing. [History](docs/ARCHITECTURE.md#why-the-power-screen-never-pops-up)
 
 Two different batteries are on this page. The big one is the **ESP32's own**
 cell on the JST connector, read through a 1:2 divider on GPIO 34 behind a MOSFET
@@ -610,7 +683,7 @@ what hosts with no thermal zone report.
 ### Several machines, one code
 
 A pairing code identifies *you*, not a machine. Run the agent on a Windows box,
-a Mac and a DietPi with the same code and all three appear on the display; the
+a Linux laptop and a DietPi with the same code and all three appear on the display; the
 buttons swipe between them. Nothing extra to configure — each agent already
 reports its `host`, and the relay keeps a slot per host instead of letting them
 overwrite each other.
@@ -623,7 +696,7 @@ The relay's reply carries them all, so the device gets everything in one poll:
   "device_count": 3,
   "devices": [
     { "host": "dietpi",     "cpu_percent": 12.5, "age_s": 3 },
-    { "host": "macbook",    "cpu_percent": 8.1,  "age_s": 2 },
+    { "host": "laptop",     "cpu_percent": 8.1,  "age_s": 2 },
     { "host": "windows-pc", "cpu_percent": 3.4,  "age_s": 1 }
   ]
 }
@@ -682,18 +755,53 @@ cable is moved.
 | Symptom | Cause |
 |---|---|
 | Display works, `NO LINK` forever | The agent isn't pushing, or the device is polling a different stream. Check `[pair] code X -> stream Y` on serial matches what the app shows. |
-| Image offset ~40 px, or garbled colours | Wrong TFT_eSPI setup selected. Step 4 above. |
+| Image offset ~40 px, or garbled colours | Wrong TFT_eSPI setup selected. Make the `User_Setup_Select.h` edit in the [manual install](#get-it), or run `tools/setup_arduino.py`. |
 | Boots, then reboots every ~60 s | Twelve failed polls in a row triggers the deliberate `esp_restart()`. The underlying failure is on the network side — watch the serial log at 115200. |
 | Screen says `cannot join <name>` | Wrong password or the network is out of range. The device reopens its setup portal by itself after two attempts — rejoin `PeekESP-XXXX` and fix it. |
 | Screen says `joining <name>...` and stays | It is retrying a network that has worked before, so it will not drop to setup. Hold the left button for 1.5 s to reconfigure. |
 | Reboot loop, `task_wdt: IDLE0 (CPU 0)` | Core 0 blocked longer than the 5 s idle watchdog. `disableCore0WDT()` in `setup()` is what stops this; if you removed it, put it back. |
 | Board runs warm | Normal to a point: the AMS1117 regulator burns `(5.0 − 3.3) × current` as heat. Modem sleep is on and the backlight cycles with the right button. |
-| Backlight on, screen black | LVGL found no `lv_conf.h`. Step 5 — it belongs *beside* the `lvgl` folder. |
+| Backlight on, screen black | LVGL found no `lv_conf.h`. It belongs *beside* the `lvgl` folder — see the [manual install](#get-it). |
 | Always boots to the QR setup screen | No SSID saved yet, or the left button is reading LOW at power-on (stuck button / something pulling GPIO 0 down). |
 | Typo'd the WiFi password | Hold the left button while powering on to force setup mode back up. |
 | `undefined reference to lv_qrcode_create` | Stock `lv_conf.h`. `LV_USE_QRCODE` and `LV_USE_SPINNER` default to 0 — use this repo's copy. |
 | `region 'dram0_0_seg' overflowed` | LVGL's heap is a static array counted against a ~160 KB segment. Lower `LV_MEM_SIZE` in `lv_conf.h` (48 KB here) or shrink the draw buffer in the sketch. |
 | `'Gauge' was not declared in this scope` | You added a function above the type it uses. The Arduino IDE injects generated prototypes before the *first* function definition, so every type used in a signature must be declared above that point. See the note on `struct Gauge`. |
+| Android widget shows old data, or none | Check the code matches (dashes and case are ignored), that the agent is pushing (`peekesp status`, or the Windows app's status line), and that the relay's daily request quota isn't spent. Android also throttles widget refreshes **[TODO: exact interval]**. |
+| Everything goes quiet part-way through the day | The free-tier request quota is probably spent. Count agents, displays and phones against 100k/day — see [Deploy the relay](#2-deploy-the-relay) — and raise the interval. |
+| Windows app says it isn't pushing | The code was mistyped, or the machine can't reach the relay URL shown in Settings. Re-enter the code, then **Save**. |
+
+## FAQ
+
+**Do I need an ESP32?** No. The Android app, a Raspberry Pi display and Home Assistant all work without one.
+
+**Do I need an account?** No. No account, no token to copy and no port forward — everything derives from the pairing code.
+
+**Is it free to run?** Within Cloudflare's free tier, yes. The limit is requests per day, not features; see the [request budget](#2-deploy-the-relay).
+
+**Can a phone and a desk display watch the same machines?** Yes. Every client that uses the same code sees the same machines.
+
+**Why not Tailscale or WireGuard?** See [Why a relay](#why-a-relay).
+
+## Privacy and security
+
+- **The relay never sees your pairing code.** The stream and tokens are derived from it locally on every client.
+- **What leaves your machine:** the fields in the [telemetry contract](#telemetry-contract) — host name, CPU, RAM, storage, temperature, battery, uptime and network rates. The relay keeps the latest reading per host and drops a host after 24 hours of silence.
+- **The setup page is plain HTTP.** The limits are spelled out under [Configuration](#configuration); read them before enabling the settings page on your network.
+- **Android:** **[TODO: what the app stores on the phone, which permissions it requests, and whether it sends anything beyond the relay.]**
+- **Reporting a vulnerability:** **[TODO: security contact or GitHub private advisory link.]**
+
+## Contributing
+
+Issues and pull requests are welcome. Hardware reports are especially useful: only the T-Display has run on hardware so far, so a note that another panel works (or doesn't) helps everyone.
+
+Before opening a pull request:
+
+- Worker changes: `cd cloudflare && npm test`.
+- Firmware changes: build against both TFT_eSPI versions in the [verified build](#4-flashing-the-esp32) table, then run `python tools/export_firmware.py` so the committed image matches the source.
+- Keep claims in this README to what has actually been tested.
+
+Release notes live on the [Releases](https://github.com/rhshourav/PeekESP/releases) page.
 
 ## License
 
