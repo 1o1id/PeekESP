@@ -364,7 +364,9 @@ Flash the sketch, and the ESP32 shows a code like **`K7M2-P4QX-9R`**. Open the
 Windows app, right-click the tray icon → **Settings**, type the code into
 **Pair a device**, press **Pair** then **Save**.
 
+<div align="center">
 <img src="img/windows-app.png" alt="The PeekESP settings window: a status line reading pushing - last push OK, a field for the pairing code, and the relay URL filled in automatically" width="440">
+</div>
 
 Everything below the code is filled in from it. The status line at the top says
 what the agent is actually doing, so "did it work" is answered on the same
@@ -492,7 +494,9 @@ There is no compile-time setup. A freshly flashed device has no WiFi
 credentials, so it boots straight into **setup mode**: it raises its own access
 point and the screen shows a QR code.
 
+<div align="center">
 <img src="img/setup-mode.jpeg" alt="The device in setup mode, showing a QR code, the access point name and its generated password" width="640">
+</div>
 
 1. Scan the QR with a phone camera — it encodes a `WIFI:` join string, so the
    phone joins the AP directly. No typing the generated password off a 1.14"
