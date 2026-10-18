@@ -74,6 +74,7 @@ import androidx.glance.appwidget.updateAll
 import com.rhshourav.peekesp.data.FetchResult
 import com.rhshourav.peekesp.data.Pairing
 import com.rhshourav.peekesp.data.RelayClient
+import com.rhshourav.peekesp.data.RelayConfig
 import com.rhshourav.peekesp.data.Setup
 import com.rhshourav.peekesp.data.SetupStore
 import com.rhshourav.peekesp.data.WidgetCache
@@ -141,6 +142,7 @@ private fun Screen() {
     var busy by remember { mutableStateOf(false) }
     var revealed by remember { mutableStateOf(false) }
     var confirmForget by remember { mutableStateOf(false) }
+    var showRelay by remember { mutableStateOf(false) }
 
     /**
      * One path for both modes. The difference is what a bad answer means:
@@ -155,7 +157,7 @@ private fun Screen() {
         notice = Notice("Checking the relay\u2026")
         scope.launch {
             val keys = Pairing.derive(code)
-            val base = RelayClient.DEFAULT_BASE
+            val base = RelayConfig.get(ctx)
             val result = withContext(Dispatchers.IO) { RelayClient.fetch(base, keys) }
             val now = System.currentTimeMillis()
 
@@ -273,6 +275,7 @@ private fun Screen() {
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
+        TextButton(onClick = { showRelay = true }){ Text("Relay address")}
     }
 
     if (confirmForget) {
@@ -298,9 +301,48 @@ private fun Screen() {
             },
             dismissButton = { TextButton(onClick = { confirmForget = false }) { Text("Keep") } },
         )
+        if (showRelay){
+            RelayDialog(onDismiss = { showRelay = false})
+
+        }
     }
 }
+@Composable
+private fun RelayDialog(onDismiss: () -> Unit) {
+    val ctx = LocalContext.current
+    var text by remember { mutableStateOf(RelayConfig.get(ctx)) }
+    var error by remember { mutableStateOf(false) }
 
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Relay address") },
+        text = {
+            Column {
+                Text("Only change this if you run your own PeekESP relay. " +
+                     "Your agents must push to the same relay.")
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it; error = false },
+                    isError = error,
+                    supportingText = { if (error) Text("Enter an address starting with https://") },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (RelayConfig.save(ctx, text)) { RefreshWorker.refreshNow(ctx); onDismiss() } else error = true
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = {
+                RelayConfig.reset(ctx)
+                RefreshWorker.refreshNow(ctx)
+                text = RelayConfig.get(ctx)
+            }) { Text("Reset to default") }
+        },
+    )
+}
 // ----------------------------------------------------------------------------
 //  Pairing forms
 // ----------------------------------------------------------------------------

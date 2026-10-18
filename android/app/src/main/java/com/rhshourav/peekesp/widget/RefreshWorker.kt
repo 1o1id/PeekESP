@@ -16,6 +16,7 @@ import com.rhshourav.peekesp.data.Pairing
 import com.rhshourav.peekesp.data.RelayClient
 import com.rhshourav.peekesp.data.SetupStore
 import com.rhshourav.peekesp.data.WidgetCache
+import com.rhshourav.peekesp.data.RelayConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
@@ -33,7 +34,7 @@ class RefreshWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ct
         }
 
         val cache = WidgetCache(app)
-        when (val r = withContext(Dispatchers.IO) { RelayClient.fetch(setup.relay, keys) }) {
+        when (val r = withContext(Dispatchers.IO) { RelayClient.fetch(RelayConfig.get(app), keys) }) {
             is FetchResult.Ok -> cache.saveOk(r.raw, r.machines.size, r.latencyMs, System.currentTimeMillis())
             FetchResult.Empty -> cache.saveOk("{}", 0, 0, System.currentTimeMillis())
             FetchResult.AuthRejected -> cache.saveAuthRejected()
