@@ -1,12 +1,17 @@
 package com.rhshourav.peekesp.widget
 
 import android.content.Context
+import com.rhshourav.peekesp.data.ClockFmt
 import com.rhshourav.peekesp.data.Fmt
 import com.rhshourav.peekesp.data.Freshness
 import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.Parser
 import com.rhshourav.peekesp.data.SetupStore
+import com.rhshourav.peekesp.data.StyleStore
 import com.rhshourav.peekesp.data.WidgetCache
+import com.rhshourav.peekesp.data.WidgetStyle
+import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /** The device's own palette (PeekESP.ino). */
@@ -42,9 +47,41 @@ enum class Link(val label: String, val color: Int) {
     NONE("NO LINK", Palette.RED),
 }
 
+/** What a page of the widget shows. The device has the same three. */
+enum class PageKind { MACHINE, POWER, CLOCK }
+
+/** One stop in the tap cycle. [machine] is an index into the machine list, or -1 for the clock. */
+data class PageRef(val kind: PageKind, val machine: Int)
+
+object Pages {
+    /**
+     * Each machine, then (if enabled, and only for machines that report a
+     * battery) that machine's battery, then the clock last.
+     */
+    fun build(machines: List<Machine>, look: WidgetStyle): List<PageRef> = buildList {
+        machines.forEachIndexed { i, m ->
+            add(PageRef(PageKind.MACHINE, i))
+            if (look.battery && m.batteryPct != null) add(PageRef(PageKind.POWER, i))
+        }
+        if (look.clock) add(PageRef(PageKind.CLOCK, -1))
+    }
+
+    /** How many pages a tap cycles through right now, for the cache to wrap around. */
+    fun count(ctx: Context): Int {
+        val cached = WidgetCache(ctx).read() ?: return 1
+        val machines = try {
+            Parser.parse(cached.raw)
+        } catch (e: Exception) {
+            return 1
+        }
+        return build(machines, StyleStore(ctx).read()).size.coerceAtLeast(1)
+    }
+}
+
 /** Everything the renderer needs, already decided. */
 data class Frame(
     val machine: Machine?,
+    /** Position in the tap cycle, and how many pages there are. */
     val index: Int = 0,
     val count: Int = 0,
     /** Seconds since this widget last got an answer from the relay. */
@@ -54,31 +91,67 @@ data class Frame(
     val latencyMs: Long = 0,
     val message: String? = null,
     val messageColor: Int = Palette.DIM,
+    val kind: PageKind = PageKind.MACHINE,
+    /** Wall clock when this frame was built; the clock page prints the date from it. */
+    val nowMs: Long = 0,
+    /**
+     * True: the renderer draws the time itself (the in-app preview).
+     * False: it leaves a gap, because on the home screen a live TextClock sits
+     * there and keeps the time right between redraws.
+     */
+    val drawTime: Boolean = true,
+    val showBattery: Boolean = true,
 ) {
     /** The widget is a bitmap, so everything on it has to be said here for TalkBack. */
     fun describe(): String {
+        if (kind == PageKind.CLOCK) {
+            // No time here: it would be stale. The live clock on the widget is read out by itself.
+            val p = ClockFmt.parts(nowMs, ZoneId.systemDefault(), Locale.getDefault(), false)
+            val parts = mutableListOf("PeekESP clock", "${p.weekday}, ${p.date}")
+            message?.let { parts += it }
+            if (count > 1) parts += "tap for the next page"
+            return parts.joinToString(". ")
+        }
         val m = machine ?: return "PeekESP. ${message ?: "No data."}"
         val parts = mutableListOf<String>()
-        parts += if (count > 1) "${m.host}, machine ${index + 1} of $count" else m.host
+        parts += if (count > 1) "${m.host}, page ${index + 1} of $count" else m.host
+        if (kind == PageKind.POWER) parts += "battery page"
         if (offline) parts += "offline, last heard ${Fmt.ago(m.ageS + sinceFetchS)} ago"
-        m.cpu?.let { parts += "CPU ${it.roundToInt()} percent" }
-        m.ram?.let { parts += "RAM ${it.roundToInt()} percent" }
-        m.tempC?.let { parts += "temperature ${it.roundToInt()} degrees" }
-        m.storagePct?.let {
-            val free = if (m.storageFreeGb != null) ", ${Fmt.capacity(m.storageFreeGb)} free" else ""
-            parts += "storage ${it.roundToInt()} percent used$free"
+        if (kind == PageKind.MACHINE) {
+            m.cpu?.let { parts += "CPU ${it.roundToInt()} percent" }
+            m.ram?.let { parts += "RAM ${it.roundToInt()} percent" }
+            m.tempC?.let { parts += "temperature ${it.roundToInt()} degrees" }
+            m.storagePct?.let {
+                val free = if (m.storageFreeGb != null) ", ${Fmt.capacity(m.storageFreeGb)} free" else ""
+                parts += "storage ${it.roundToInt()} percent used$free"
+            }
+            m.rxKbps?.let { parts += "download ${Fmt.rate(it)}" }
+            m.txKbps?.let { parts += "upload ${Fmt.rate(it)}" }
         }
-        m.rxKbps?.let { parts += "download ${Fmt.rate(it)}" }
-        m.txKbps?.let { parts += "upload ${Fmt.rate(it)}" }
+        if (showBattery) {
+            m.batteryPct?.let {
+                val state = when {
+                    m.charging -> ", charging"
+                    m.ac -> ", on AC"
+                    else -> ", on battery"
+                }
+                parts += "battery $it percent$state"
+            }
+            if (kind == PageKind.POWER && !m.charging && !m.ac) {
+                m.batteryMin?.let { parts += "${Fmt.remaining(it)} left" }
+            }
+        }
         if (!offline) Fmt.uptime(m.uptimeS).takeIf { it.isNotEmpty() }?.let { parts += it }
         parts += "link ${link.label.lowercase()}"
         parts += Fmt.asOf(sinceFetchS + m.ageS)
-        if (count > 1) parts += "tap for the next machine"
+        if (count > 1) parts += "tap for the next page"
         return parts.joinToString(". ")
     }
 }
 
 object FrameBuilder {
+    private const val NOTHING = "Nothing is pushing to this code yet."
+
     fun build(ctx: Context, nowMs: Long): Frame {
         if (!SetupStore(ctx).has()) {
             return Frame(null, message = "Not paired. Open PeekESP and enter your code.", messageColor = Palette.AMBER)
@@ -93,11 +166,25 @@ object FrameBuilder {
         } catch (e: Exception) {
             return Frame(null, message = "Unreadable reply from the relay.", messageColor = Palette.RED)
         }
-        if (machines.isEmpty()) return Frame(null, message = "Nothing is pushing to this code yet.")
 
-        val index = cached.index.coerceIn(0, machines.size - 1)
-        val m = machines[index]
+        val look = StyleStore(ctx).read()
+        val pages = Pages.build(machines, look)
+        if (pages.isEmpty()) return Frame(null, message = NOTHING)
+
+        val index = cached.index.coerceIn(0, pages.size - 1)
+        val page = pages[index]
         val since = ((nowMs - cached.fetchedAtMs).coerceAtLeast(0)) / 1000
+
+        if (page.kind == PageKind.CLOCK) {
+            return Frame(
+                machine = null, index = index, count = pages.size, sinceFetchS = since,
+                kind = PageKind.CLOCK, nowMs = nowMs, drawTime = false, showBattery = look.battery,
+                // A clock with no machines would otherwise hide why there is nothing else to see.
+                message = if (machines.isEmpty()) NOTHING else null,
+            )
+        }
+
+        val m = machines[page.machine]
 
         // "Offline" is the machine's own silence when we fetched. The widget's age
         // is a separate fact, printed in the footer, so the two never blur together.
@@ -107,6 +194,10 @@ object FrameBuilder {
             offline || since > Freshness.WIDGET_STALE_S -> Link.STALE
             else -> Link.OK
         }
-        return Frame(m, index, machines.size, since, offline, link, cached.latencyMs)
+        return Frame(
+            machine = m, index = index, count = pages.size, sinceFetchS = since,
+            offline = offline, link = link, latencyMs = cached.latencyMs,
+            kind = page.kind, nowMs = nowMs, drawTime = false, showBattery = look.battery,
+        )
     }
 }

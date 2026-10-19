@@ -13,6 +13,7 @@ import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.clickable
+import androidx.glance.appwidget.AndroidRemoteViews
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
@@ -22,6 +23,7 @@ import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.state.updateAppWidgetState
 import androidx.glance.currentState
+import androidx.glance.layout.Box
 import androidx.glance.layout.ContentScale
 import androidx.glance.layout.fillMaxSize
 import com.rhshourav.peekesp.data.StyleStore
@@ -49,7 +51,7 @@ suspend fun redrawWidgets(context: Context) {
     }
 }
 
-/** The home-screen widget: one machine, drawn like the device's own screen. */
+/** The home-screen widget: one page at a time, drawn like the device's own screen. */
 class PeekWidget : GlanceAppWidget() {
     // The renderer draws at the exact size the launcher gives, so the glass has
     // the right corner radius and the layout the right proportions at any size.
@@ -66,9 +68,13 @@ class PeekWidget : GlanceAppWidget() {
         val density = ctx.resources.displayMetrics.density
         val rev = currentState<Preferences>()[REV] ?: 0L
 
+        // The size the launcher shows the widget at, in pixels. The live clock is laid out against this.
+        val shownW = (size.width.value * density).toInt().coerceAtLeast(1)
+        val shownH = (size.height.value * density).toInt().coerceAtLeast(1)
+
         // RemoteViews has a bitmap memory ceiling; stay far below it.
-        var w = (size.width.value * density).toInt().coerceAtLeast(1)
-        var h = (size.height.value * density).toInt().coerceAtLeast(1)
+        var w = shownW
+        var h = shownH
         if (w.toLong() * h > MAX_PIXELS) {
             val k = sqrt(MAX_PIXELS.toDouble() / (w.toLong() * h)).toFloat()
             w = (w * k).toInt().coerceAtLeast(1)
@@ -79,12 +85,21 @@ class PeekWidget : GlanceAppWidget() {
         val look = remember(rev) { StyleStore(ctx).read() }
         val bitmap = remember(w, h, rev) { WidgetRenderer.render(ctx, w, h, frame, look) }
 
-        Image(
-            provider = ImageProvider(bitmap),
-            contentDescription = frame.describe(),
-            contentScale = ContentScale.Fit,
-            modifier = GlanceModifier.fillMaxSize().clickable(actionRunCallback<NextMachineAction>()),
-        )
+        Box(modifier = GlanceModifier.fillMaxSize()) {
+            Image(
+                provider = ImageProvider(bitmap),
+                contentDescription = frame.describe(),
+                contentScale = ContentScale.Fit,
+                modifier = GlanceModifier.fillMaxSize().clickable(actionRunCallback<NextPageAction>()),
+            )
+            if (frame.kind == PageKind.CLOCK) {
+                // Not clickable itself, so a tap on the digits falls through to the image under it.
+                AndroidRemoteViews(
+                    remoteViews = ClockOverlay.build(ctx, shownW, shownH),
+                    modifier = GlanceModifier.fillMaxSize(),
+                )
+            }
+        }
     }
 
     private companion object {
@@ -107,10 +122,10 @@ class PeekWidgetReceiver : GlanceAppWidgetReceiver() {
     }
 }
 
-/** Tap: show the next machine from what is already cached, then ask for fresh numbers. */
-class NextMachineAction : ActionCallback {
+/** Tap: show the next page (a machine, its battery, or the clock) from what is cached, then ask for fresh numbers. */
+class NextPageAction : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
-        WidgetCache(context).advance()
+        WidgetCache(context).advance(Pages.count(context))
         redrawWidgets(context)
         RefreshWorker.refreshNow(context)
     }

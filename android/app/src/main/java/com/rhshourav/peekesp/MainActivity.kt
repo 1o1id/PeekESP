@@ -34,6 +34,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -47,6 +48,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -100,6 +103,7 @@ import com.rhshourav.peekesp.data.WidgetCache
 import com.rhshourav.peekesp.data.WidgetStyle
 import com.rhshourav.peekesp.widget.Frame
 import com.rhshourav.peekesp.widget.Link
+import com.rhshourav.peekesp.widget.PageKind
 import com.rhshourav.peekesp.widget.Palette
 import com.rhshourav.peekesp.widget.PeekWidgetReceiver
 import com.rhshourav.peekesp.widget.RefreshWorker
@@ -273,7 +277,12 @@ private fun Screen() {
             subtitle = if (current == null) "Pair this phone with a device or agent." else null,
         ) {
             if (current == null) {
-                ModeToggle(mode = mode, enabled = !busy, onChange = { mode = it; notice = null })
+                Segmented(
+                    options = listOf(Mode.ENTER to "I have a code", Mode.CREATE to "Create a code"),
+                    selected = mode,
+                    enabled = !busy,
+                    onSelect = { mode = it; notice = null },
+                )
                 when (mode) {
                     Mode.ENTER -> EnterCodeForm(
                         input = input,
@@ -306,12 +315,12 @@ private fun Screen() {
             }
         }
 
-        // ---- 2. Widget look ----
+        // ---- 2. Widget ----
         SectionCard(
-            title = "Widget look",
+            title = "Widget",
             subtitle = "Changes reach your home screen automatically.",
         ) {
-            LookPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
+            WidgetPanel(store = styleStore, onApply = { scope.launch { redrawWidgets(ctx) } })
         }
 
         // ---- 3. Relay ----
@@ -469,32 +478,64 @@ private fun SectionCard(
 }
 
 // ----------------------------------------------------------------------------
-//  Widget look
+//  Widget
 // ----------------------------------------------------------------------------
 
 /** Made-up readings, so the preview works before anything is paired. */
-private val SAMPLE_FRAME = Frame(
-    machine = Machine(
-        host = "preview", ageS = 2, cpu = 42.0, ram = 61.0, storagePct = 58.0,
-        storageTotalGb = 512.0, storageFreeGb = 215.0, tempC = 48.0,
-        batteryPct = null, batteryMin = null, charging = false, ac = false,
-        rxKbps = 1331.0, txKbps = 113.0, uptimeS = 3 * 86400L + 4 * 3600,
-    ),
-    index = 0, count = 2, sinceFetchS = 0, offline = false, link = Link.OK, latencyMs = 42,
+private val SAMPLE_MACHINE = Machine(
+    host = "preview", ageS = 2, cpu = 42.0, ram = 61.0, storagePct = 58.0,
+    storageTotalGb = 512.0, storageFreeGb = 215.0, tempC = 48.0,
+    batteryPct = 64, batteryMin = 190, charging = true, ac = true,
+    rxKbps = 1331.0, txKbps = 113.0, uptimeS = 3 * 86400L + 4 * 3600,
 )
 
+private fun sampleFrame(kind: PageKind, nowMs: Long, count: Int, index: Int, look: WidgetStyle) = Frame(
+    machine = if (kind == PageKind.CLOCK) null else SAMPLE_MACHINE,
+    index = index, count = count, sinceFetchS = 0, offline = false, link = Link.OK, latencyMs = 42,
+    kind = kind, nowMs = nowMs, drawTime = true, showBattery = look.battery,
+)
+
+private fun PageKind.label() = when (this) {
+    PageKind.MACHINE -> "Machine"
+    PageKind.POWER -> "Battery"
+    PageKind.CLOCK -> "Clock"
+}
+
 @Composable
-private fun LookPanel(store: StyleStore, onApply: () -> Unit) {
+private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
     val ctx = LocalContext.current
     var look by remember { mutableStateOf(store.read()) }
     var applied by remember { mutableStateOf(look) }
+    var wanted by rememberSaveable { mutableStateOf(PageKind.MACHINE) }
+    var now by remember { mutableStateOf(System.currentTimeMillis()) }
 
-    // The same renderer the widget uses, so what you see here is what the home screen gets.
-    val preview = remember(look) {
-        WidgetRenderer.render(ctx, 640, 360, SAMPLE_FRAME, look).asImageBitmap()
+    // Only pages that are switched on can be previewed, in the order the widget cycles them.
+    val kinds = buildList {
+        add(PageKind.MACHINE)
+        if (look.battery) add(PageKind.POWER)
+        if (look.clock) add(PageKind.CLOCK)
+    }
+    val kind = if (wanted in kinds) wanted else PageKind.MACHINE
+
+    // The preview clock keeps time while you look at it.
+    LaunchedEffect(kind) {
+        while (kind == PageKind.CLOCK) {
+            now = System.currentTimeMillis()
+            delay(15_000)
+        }
     }
 
-    // Auto-sync: a short pause after the last movement, then the widget redraws.
+    // The same renderer the widget uses, so what you see here is what the home screen gets.
+    val minute = if (kind == PageKind.CLOCK) now / 60_000 else 0L
+    val preview = remember(look, kind, minute) {
+        WidgetRenderer.render(
+            ctx, 640, 360,
+            sampleFrame(kind, now, kinds.size, kinds.indexOf(kind), look),
+            look,
+        ).asImageBitmap()
+    }
+
+    // Auto-sync: a short pause after the last change, then the widget redraws.
     // Restarting on every change is the debounce.
     LaunchedEffect(look) {
         if (look != applied) {
@@ -518,11 +559,29 @@ private fun LookPanel(store: StyleStore, onApply: () -> Unit) {
     ) {
         Image(
             bitmap = preview,
-            contentDescription = "Preview of the widget with these settings",
+            contentDescription = "Preview of the ${kind.label().lowercase()} page of the widget",
             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
         )
     }
+    if (kinds.size > 1) {
+        Segmented(options = kinds.map { it to it.label() }, selected = kind, onSelect = { wanted = it })
+    }
 
+    SubHeading("Pages")
+    ToggleRow(
+        title = "Clock",
+        subtitle = "Time and date. Tap the widget to flip to it.",
+        checked = look.clock,
+        onChange = { look = look.copy(clock = it); store.save(look) },
+    )
+    ToggleRow(
+        title = "Battery and charging",
+        subtitle = "Level and charging state for machines that report a battery.",
+        checked = look.battery,
+        onChange = { look = look.copy(battery = it); store.save(look) },
+    )
+
+    SubHeading("Look")
     StyleSlider(
         label = "Background opacity",
         value = look.opacity,
@@ -535,17 +594,55 @@ private fun LookPanel(store: StyleStore, onApply: () -> Unit) {
     )
 
     Text(
-        "Lower opacity shows more of your wallpaper but can make text hard to read on bright " +
-            "backgrounds. Android cannot blur what is behind a widget, so the glass effect is " +
-            "lighting only: corner light, sheen and rim.",
+        "The preview uses sample readings. On the widget the clock shows your phone's time and " +
+            "keeps itself right. Lower opacity shows more wallpaper but can make text hard to read " +
+            "on bright backgrounds. Android cannot blur what is behind a widget, so the glass " +
+            "effect is lighting only.",
         style = MaterialTheme.typography.bodySmall,
         color = Color(Palette.DIM),
     )
+    val lookIsDefault = look.opacity == WidgetStyle.DEFAULT_OPACITY && look.glass == WidgetStyle.DEFAULT_GLASS
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
         TextButton(
-            onClick = { look = WidgetStyle(); store.save(look) },
-            enabled = look != WidgetStyle(),
-        ) { Text("Reset to defaults") }
+            onClick = {
+                look = look.copy(opacity = WidgetStyle.DEFAULT_OPACITY, glass = WidgetStyle.DEFAULT_GLASS)
+                store.save(look)
+            },
+            enabled = !lookIsDefault,
+        ) { Text("Reset look") }
+    }
+}
+
+@Composable
+private fun SubHeading(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = Color(Palette.CYAN),
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/** The whole row toggles, not just the switch: a bigger target, and one stop for TalkBack. */
+@Composable
+private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 56.dp)
+            .toggleable(value = checked, role = Role.Switch, onValueChange = onChange),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = Color(Palette.DIM))
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = null,
+            colors = SwitchDefaults.colors(uncheckedTrackColor = Color(Palette.TRACK)),
+        )
     }
 }
 
@@ -700,8 +797,14 @@ private fun openLink(ctx: Context, url: String) {
 //  Pairing forms
 // ----------------------------------------------------------------------------
 
+/** A row of exclusive choices: pairing mode, and which widget page to preview. */
 @Composable
-private fun ModeToggle(mode: Mode, enabled: Boolean, onChange: (Mode) -> Unit) {
+private fun <T> Segmented(
+    options: List<Pair<T, String>>,
+    selected: T,
+    enabled: Boolean = true,
+    onSelect: (T) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -709,34 +812,32 @@ private fun ModeToggle(mode: Mode, enabled: Boolean, onChange: (Mode) -> Unit) {
             .background(Color(Palette.BG), RoundedCornerShape(14.dp))
             .padding(4.dp),
     ) {
-        @Composable
-        fun Option(target: Mode, label: String) {
-            val selected = mode == target
+        options.forEach { (value, label) ->
+            val on = value == selected
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = 48.dp)                       // touch target
                     .background(
-                        if (selected) Color(Palette.CYAN) else Color.Transparent,
+                        if (on) Color(Palette.CYAN) else Color.Transparent,
                         RoundedCornerShape(10.dp),
                     )
                     .selectable(
-                        selected = selected,
+                        selected = on,
                         enabled = enabled,
                         role = Role.RadioButton,
-                        onClick = { onChange(target) },
+                        onClick = { onSelect(value) },
                     ),
             ) {
                 Text(
                     label,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (selected) Color(Palette.BG) else Color(Palette.TEXT),
+                    maxLines = 1,
+                    fontWeight = if (on) FontWeight.Bold else FontWeight.Medium,
+                    color = if (on) Color(Palette.BG) else Color(Palette.TEXT),
                 )
             }
         }
-        Option(Mode.ENTER, "I have a code")
-        Option(Mode.CREATE, "Create a code")
     }
 }
 

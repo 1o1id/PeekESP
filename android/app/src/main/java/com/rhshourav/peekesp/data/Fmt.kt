@@ -54,6 +54,17 @@ object Fmt {
         else -> "as of ${s / 86400}d ago"
     }
 
+    /** "BAT 64%+": the + means a charger is attached and charging, as on the device. */
+    fun batteryLine(pct: Int?, charging: Boolean): String =
+        if (pct == null) "BAT --" else "BAT $pct%" + if (charging) "+" else ""
+
+    /** Minutes as "2h 10m" or "45m". */
+    fun remaining(min: Int): String {
+        val h = min / 60
+        val m = min % 60
+        return if (h > 0) "${h}h ${m}m" else "${m}m"
+    }
+
     fun latency(ms: Long): String = when {
         ms <= 0 -> "-- ms"
         ms < 1000 -> "$ms ms"

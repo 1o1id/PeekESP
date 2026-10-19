@@ -37,7 +37,6 @@ class WidgetCache(context: Context) {
         p.edit()
             .putString("raw", raw).putLong("at", nowMs).putLong("ms", latencyMs)
             .putInt("count", count).putString("status", Status.OK.name)
-            .putInt("index", p.getInt("index", 0).coerceIn(0, maxOf(0, count - 1)))
             .apply()
     }
 
@@ -46,10 +45,16 @@ class WidgetCache(context: Context) {
 
     fun saveAuthRejected() = p.edit().putString("status", Status.AUTH.name).apply()
 
-    /** Tap on the widget: next machine, wrapping. */
-    fun advance() {
-        val n = maxOf(1, p.getInt("count", 1))
-        p.edit().putInt("index", (p.getInt("index", 0) + 1) % n).apply()
+    /**
+     * Tap on the widget: next page, wrapping. A page is a machine, a machine's
+     * battery, or the clock, so the caller says how many there are right now.
+     * The saved index is deliberately not clamped on a refresh: that would throw
+     * the viewer off the clock page every 15 minutes. It is clamped when read.
+     */
+    fun advance(pageCount: Int) {
+        val n = maxOf(1, pageCount)
+        val cur = p.getInt("index", 0).coerceIn(0, n - 1)
+        p.edit().putInt("index", (cur + 1) % n).apply()
     }
 
     fun clear() = p.edit().clear().apply()

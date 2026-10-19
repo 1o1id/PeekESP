@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
@@ -12,14 +13,20 @@ import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.text.format.DateFormat
+import com.rhshourav.peekesp.data.ClockFmt
 import com.rhshourav.peekesp.data.Fmt
+import com.rhshourav.peekesp.data.Machine
 import com.rhshourav.peekesp.data.WidgetStyle
+import java.time.ZoneId
+import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
- * Draws the device's dashboard (PeekESP.ino, layout_metrics.h) onto a glass card.
+ * Draws the device's pages (PeekESP.ino, layout_metrics.h, clock_faces.h) onto a glass card:
+ * a machine, a machine's battery, and the clock.
  *
  * Every position below is a coordinate on the T-Display's 240x135 screen and is
  * scaled to whatever size the widget is, the same way layout_metrics.h does it:
@@ -29,6 +36,11 @@ import kotlin.math.roundToInt
  *
  * Why a bitmap: Glance renders through RemoteViews, which cannot draw arcs. The
  * widget shows this bitmap as one image and describes it for TalkBack.
+ *
+ * Why the clock's digits are not in it on the home screen: a bitmap is only redrawn
+ * every 15 minutes, so a time drawn into it would be wrong most of the time. The
+ * widget lays a live TextClock over the gap instead ([clockMetrics] says where).
+ * The in-app preview has no such overlay, so it draws the time itself.
  *
  * Why "glass-like", not glass: RemoteViews cannot sample or blur the wallpaper.
  * Tint, light from two corners, a sheen and a specular rim are as far as a
@@ -54,10 +66,37 @@ object WidgetRenderer {
         fun m(v: Float) = v * sm
     }
 
+    private fun geo(w: Float, h: Float): Geo {
+        val pad = h * 0.06f
+        return Geo(pad, pad, w - 2 * pad, h - 2 * pad)
+    }
+
     private fun Int.alpha(a: Int) = (this and 0x00FFFFFF) or (a shl 24)
 
     /** Multiplies the colour's own alpha by k (0 = invisible). */
     private fun Int.scaleAlpha(k: Float) = alpha(((this ushr 24) * k).roundToInt().coerceIn(0, 255))
+
+    /** Where and how big the live clock goes, in pixels of the widget as the launcher shows it. */
+    class ClockMetrics(
+        val timePx: Float,
+        val ampmPx: Float,
+        val rowTopPx: Int,
+        val ampmGapPx: Int,
+        val ampmTopPx: Int,
+    )
+
+    fun clockMetrics(w: Int, h: Int): ClockMetrics {
+        val g = geo(max(1, w).toFloat(), max(1, h).toFloat())
+        val timePx = g.m(36f)
+        return ClockMetrics(
+            timePx = timePx,
+            ampmPx = g.m(12f),
+            // The row is centred on y = 53, as on the device; a line is about 1.17 em tall.
+            rowTopPx = (g.y(53f) - timePx * 0.585f).roundToInt().coerceAtLeast(0),
+            ampmGapPx = g.m(6f).roundToInt(),
+            ampmTopPx = (timePx * 0.08f).roundToInt(),
+        )
+    }
 
     fun render(ctx: Context, w: Int, h: Int, f: Frame, look: WidgetStyle = WidgetStyle()): Bitmap {
         val bmp = Bitmap.createBitmap(max(1, w), max(1, h), Bitmap.Config.ARGB_8888)
@@ -66,8 +105,7 @@ object WidgetRenderer {
         val hf = bmp.height.toFloat()
         drawGlass(c, wf, hf, f, look)
 
-        val pad = hf * 0.06f
-        val g = Geo(pad, pad, wf - 2 * pad, hf - 2 * pad)
+        val g = geo(wf, hf)
         val reg = Fonts.get(ctx, 500)
         val bold = Fonts.get(ctx, 700)
         val m = f.machine
@@ -80,6 +118,10 @@ object WidgetRenderer {
         c.drawLine(g.x(8f), g.y(19f), g.x(232f), g.y(19f), rule)
         dot(c, g, f.link.color.takeIf { m != null } ?: Palette.DIM)
 
+        if (f.kind == PageKind.CLOCK) {
+            clockPage(ctx, c, g, f, reg, bold)
+            return bmp
+        }
         if (m == null) {
             message(c, g, f, reg)
             return bmp
@@ -94,6 +136,12 @@ object WidgetRenderer {
 
         // Offline numbers go dim: "this is the last thing we heard", not "this is now".
         val value = if (f.offline) Palette.DIM else Palette.TEXT
+
+        if (f.kind == PageKind.POWER) {
+            powerPage(c, g, f, m, value, bold, reg)
+            footer(c, g, f, m, reg)
+            return bmp
+        }
 
         // ---- gauges ----
         gauge(c, g, g.x(6f), g.y(23f), m.cpu, Palette.CYAN, value, "CPU %", bold, reg)
@@ -119,7 +167,12 @@ object WidgetRenderer {
         text(c, "TEMP", tx, ty, ink(reg, g.m(12f), Palette.DIM))
         text(c, Fmt.temp(m.tempC), tx, ty + g.m(9f), ink(bold, g.m(20f), value))
         text(c, "RX ${Fmt.rate(m.rxKbps)}", tx, ty + g.m(33f), ink(reg, g.m(11f), Palette.DIM))
-        text(c, "TX ${Fmt.rate(m.txKbps)}", tx, ty + g.m(45f), ink(reg, g.m(11f), Palette.DIM))
+
+        // The device swaps TX for the battery when the machine has one: "BAT 64%+".
+        val showBat = look.battery && m.batteryPct != null
+        val lastLine = if (showBat) Fmt.batteryLine(m.batteryPct, m.charging) else "TX ${Fmt.rate(m.txKbps)}"
+        val lastInk = if (showBat && !m.charging && (m.batteryPct ?: 100) <= 15) Palette.RED else Palette.DIM
+        text(c, lastLine, tx, ty + g.m(45f), ink(reg, g.m(11f), lastInk))
 
         // ---- storage ----
         val cap = if (m.storageTotalGb != null && m.storageTotalGb > 0 && m.storageFreeGb != null) {
@@ -146,7 +199,115 @@ object WidgetRenderer {
             )
         }
 
-        // ---- footer: uptime (or "offline 5m") ... as of 12m ago ... LINK OK ----
+        footer(c, g, f, m, reg)
+        return bmp
+    }
+
+    // ------------------------------------------------------------------------
+    //  Pages
+    // ------------------------------------------------------------------------
+
+    /** The machine's own battery: the cell drawn, the level, and what it is doing. */
+    private fun powerPage(c: Canvas, g: Geo, f: Frame, m: Machine, valueInk: Int, bold: Typeface, reg: Typeface) {
+        val pct = (m.batteryPct ?: 0).coerceIn(0, 100)
+        val frac = pct / 100f
+        val level = when {
+            f.offline -> Palette.DIM
+            m.charging -> Palette.GREEN
+            pct <= 15 -> Palette.RED
+            pct <= 30 -> Palette.AMBER
+            else -> Palette.GREEN
+        }
+
+        text(c, "BATTERY", g.x(8f), g.y(24f), ink(reg, g.m(12f), Palette.DIM))
+
+        // The cell: body, terminal nub, and a fill that is the charge.
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE; strokeWidth = max(1f, g.m(2f)); color = Palette.DIM
+        }
+        c.drawRoundRect(RectF(g.x(12f), g.y(40f), g.x(122f), g.y(90f)), g.m(4f), g.m(4f), outline)
+        c.drawRoundRect(
+            RectF(g.x(122f), g.y(56f), g.x(127f), g.y(74f)), g.m(1f), g.m(1f),
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.DIM },
+        )
+        if (frac > 0f) {
+            val l = g.x(17f)
+            val fw = max(g.m(4f), 102f * g.sx * frac)
+            c.drawRoundRect(
+                RectF(l, g.y(45f), l + fw, g.y(85f)), g.m(2f), g.m(2f),
+                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = level },
+            )
+        }
+        if (m.charging) {
+            // Drawn, not a glyph: the device draws its bolt too. Centred on the cell.
+            val dx = 9f
+            val bolt = Path().apply {
+                moveTo(g.x(61.5f + dx), g.y(54f))
+                lineTo(g.x(52f + dx), g.y(67.5f))
+                lineTo(g.x(57.5f + dx), g.y(67.5f))
+                lineTo(g.x(55.5f + dx), g.y(78f))
+                lineTo(g.x(65.5f + dx), g.y(63.5f))
+                lineTo(g.x(60f + dx), g.y(63.5f))
+                close()
+            }
+            // Dark on a full cell, light on a nearly empty one: whichever contrasts with what is under it.
+            c.drawPath(bolt, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = if (frac >= 0.45f) Palette.BG else Palette.TEXT })
+        }
+
+        val rx = g.x(132f)
+        val room = 100f * g.sx
+        text(c, "$pct%", rx, g.y(34f), ink(bold, g.m(22f), valueInk))
+
+        val (state, stateInk) = when {
+            m.charging -> "CHARGING" to Palette.AMBER
+            m.ac -> "ON AC" to Palette.DIM
+            else -> "ON BATTERY" to Palette.DIM
+        }
+        val sp = ink(reg, g.m(12f), if (f.offline) Palette.DIM else stateInk)
+        text(c, fit(state, sp, room), rx, g.y(64f), sp)
+
+        val left = if (!m.charging && !m.ac) m.batteryMin?.let { "${Fmt.remaining(it)} left" } else null
+        if (left != null) {
+            val lp = ink(reg, g.m(12f), Palette.DIM)
+            text(c, fit(left, lp, room), rx, g.y(80f), lp)
+        }
+    }
+
+    /**
+     * The clock page. On the home screen the big digits are a live TextClock laid
+     * over the gap left here; with [Frame.drawTime] set, they are drawn instead.
+     */
+    private fun clockPage(ctx: Context, c: Canvas, g: Geo, f: Frame, reg: Typeface, bold: Typeface) {
+        val p = ClockFmt.parts(f.nowMs, ZoneId.systemDefault(), Locale.getDefault(), DateFormat.is24HourFormat(ctx))
+
+        text(c, "// ${p.zone}", g.x(44f), g.y(3f), ink(reg, g.m(12f), Palette.DIM))
+        if (f.count > 1) {
+            textRight(c, "${f.index + 1}/${f.count}", g.x(206f), g.y(3f), ink(reg, g.m(12f), Palette.CYAN))
+        }
+
+        if (f.drawTime) {
+            val tp = ink(bold, g.m(36f), Palette.TEXT)
+            val ap = ink(reg, g.m(12f), Palette.DIM)
+            val gap = if (p.ampm.isEmpty()) 0f else g.m(6f)
+            val tw = tp.measureText(p.time)
+            val aw = if (p.ampm.isEmpty()) 0f else ap.measureText(p.ampm)
+            val left = g.x(120f) - (tw + gap + aw) / 2f
+            tp.textAlign = Paint.Align.LEFT
+            c.drawText(p.time, left, g.y(53f) - (tp.descent() + tp.ascent()) / 2f, tp)
+            if (p.ampm.isNotEmpty()) text(c, p.ampm, left + tw + gap, g.y(53f) - g.m(16f), ap)
+        }
+
+        centered(c, p.weekday, g.x(120f), g.y(94f), ink(reg, g.m(14f), Palette.TEXT))
+        centered(c, p.date, g.x(120f), g.y(112f), ink(reg, g.m(12f), Palette.DIM))
+
+        f.message?.let { msg ->
+            val mp = ink(reg, g.m(10f), Palette.DIM)
+            centered(c, fit(msg, mp, 224f * g.sx), g.x(120f), g.y(126f), mp)
+        }
+    }
+
+    /** uptime (or "offline 5m") ... as of 12m ago ... LINK OK */
+    private fun footer(c: Canvas, g: Geo, f: Frame, m: Machine, reg: Typeface) {
         val foot = g.y(118f)
         val leftText = if (f.offline) "offline ${Fmt.ago(m.ageS + f.sinceFetchS)}" else Fmt.uptime(m.uptimeS)
         val leftPaint = ink(reg, g.m(12f), Palette.DIM)
@@ -167,7 +328,6 @@ object WidgetRenderer {
             asOf.textAlign = Paint.Align.CENTER
             c.drawText(label, (from + to) / 2f, foot - asOf.ascent(), asOf)
         }
-        return bmp
     }
 
     // ------------------------------------------------------------------------

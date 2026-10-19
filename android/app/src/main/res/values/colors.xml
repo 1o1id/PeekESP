@@ -1,3 +1,6 @@
 <resources>
     <color name="ic_launcher_background">#05070E</color>
+    <!-- Match Palette.TEXT and Palette.DIM; the live clock on the widget is a native view and cannot read them. -->
+    <color name="peek_text">#E6EDF7</color>
+    <color name="peek_dim">#93A3BA</color>
 </resources>
