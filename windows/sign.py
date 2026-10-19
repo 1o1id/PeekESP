@@ -28,10 +28,23 @@ on FIPS 140-2 Level 2 hardware - so the cheap file-based certificates that
 used to exist are gone. See SIGNING.md for what the real options cost.
 
 winget does NOT require any of this. An unsigned build is publishable.
+
+--------------------------------------------------------------------------
+HOW --pfx HANDLES THE PASSWORD
+--------------------------------------------------------------------------
+signtool can only take a .pfx password as "/p <password>", which puts it in
+signtool's command line, readable by any local user via the process list.
+So --pfx never calls signtool with the file. Instead the .pfx is imported into
+CurrentUser\\My by PowerShell (the password travels in that child process's
+environment, never in an argv), signtool signs by thumbprint, and the
+certificate is removed again afterwards - but only if this run put it there.
+A certificate that was already in your store is left alone.
 """
 
 import argparse
+import getpass
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +59,8 @@ TIMESTAMP_URLS = [
     "http://timestamp.digicert.com",
     "http://timestamp.sectigo.com",
 ]
+
+THUMBPRINT_RE = re.compile(r"[0-9A-Fa-f]{40}")
 
 if os.name != "nt":
     sys.exit("sign.py drives signtool.exe and must run on Windows.")
@@ -96,6 +111,72 @@ def run(cmd, quiet=False):
     return r.returncode
 
 
+# --- .pfx handling: import, sign by thumbprint, clean up --------------------
+
+# The password and path come in through environment variables, so neither is
+# ever interpolated into the script text or placed on a command line.
+_IMPORT_PS = r"""
+$ErrorActionPreference = 'Stop'
+$p = @{ FilePath = $env:PEEK_PFX_PATH }
+if ($env:PEEK_PFX_SECRET) {
+    $p.Password = ConvertTo-SecureString $env:PEEK_PFX_SECRET -AsPlainText -Force
+}
+$thumb = (Get-PfxData @p).EndEntityCertificates[0].Thumbprint
+if (Test-Path ("Cert:\CurrentUser\My\" + $thumb)) {
+    "EXISTING $thumb"
+} else {
+    Import-PfxCertificate @p -CertStoreLocation Cert:\CurrentUser\My | Out-Null
+    "IMPORTED $thumb"
+}
+"""
+
+
+def _powershell(script, extra_env):
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True, text=True,
+        env={**os.environ, **extra_env},
+    )
+
+
+def import_pfx(pfx, env_name):
+    """
+    Make the .pfx's certificate available in CurrentUser\\My.
+    Returns (thumbprint, imported_by_us).
+    """
+    secret = os.environ.get(env_name, "")
+    if not secret and sys.stdin.isatty():
+        secret = getpass.getpass("PFX password (leave empty if it has none): ")
+    elif not secret:
+        print(f"note: {env_name} is not set and there is no terminal to ask "
+              "on; trying the .pfx without a password")
+
+    r = _powershell(_IMPORT_PS, {"PEEK_PFX_PATH": str(pfx),
+                                 "PEEK_PFX_SECRET": secret})
+    lines = r.stdout.split()
+    if (r.returncode != 0 or len(lines) != 2 or lines[0] not in ("IMPORTED", "EXISTING")
+            or not THUMBPRINT_RE.fullmatch(lines[1])):
+        sys.exit("could not import the certificate:\n   "
+                 + (r.stderr.strip() or r.stdout.strip() or "no output from PowerShell")
+                 + "\n   (wrong password? Windows PowerShell 5.1 with the PKI module "
+                   "is required)")
+    return lines[1], lines[0] == "IMPORTED"
+
+
+def remove_cert(thumb):
+    """Delete a certificate and its private key from CurrentUser\\My."""
+    if not THUMBPRINT_RE.fullmatch(thumb):  # belt and braces: it is interpolated below
+        return
+    r = _powershell(
+        f"Remove-Item -LiteralPath 'Cert:\\CurrentUser\\My\\{thumb}' -DeleteKey",
+        {})
+    if r.returncode != 0:
+        print(f"warning: could not remove the temporary certificate {thumb}\n"
+              f"  remove it yourself:  certmgr.msc  ->  Personal  ->  Certificates")
+
+
+# --- signing ----------------------------------------------------------------
+
 def sign_one(signtool, exe, base_args):
     """Sign one file, trying each timestamp server before giving up.
 
@@ -132,12 +213,15 @@ def main():
                "anyone else's machine. See SIGNING.md.")
     ap.add_argument("--thumbprint", help="SHA-1 thumbprint of a certificate in "
                                          "the Windows certificate store")
-    ap.add_argument("--pfx", help="path to a .pfx / .p12 certificate file")
-    ap.add_argument("--password-env", default="PEEK_SIGN_PASSWORD",
+    ap.add_argument("--pfx", help="path to a .pfx / .p12 certificate file. It is "
+                                  "imported into your store for the duration of "
+                                  "the run and removed afterwards.")
+    ap.add_argument("--password-env", dest="pfx_env", default="PEEK_SIGN_PASSWORD",
                     help="environment variable holding the .pfx password "
                          "(default: %(default)s). Never pass it on the command "
                          "line: it lands in your shell history and in the "
-                         "process list, where any local user can read it.")
+                         "process list, where any local user can read it. If "
+                         "it is unset you are asked on the terminal.")
     ap.add_argument("--azure-dlib", help="Azure.CodeSigning.Dlib.dll, for "
                                          "Azure Trusted Signing")
     ap.add_argument("--azure-metadata", help="Trusted Signing metadata json")
@@ -165,34 +249,40 @@ def main():
         return 0 if ok else 1
 
     # --- how to sign -------------------------------------------------------
-    if a.azure_dlib or a.azure_metadata:
-        if not (a.azure_dlib and a.azure_metadata):
-            ap.error("--azure-dlib and --azure-metadata go together")
-        base = ["/v", "/dlib", a.azure_dlib, "/dmdf", a.azure_metadata]
-    elif a.thumbprint:
-        base = ["/sha1", a.thumbprint.replace(" ", "")]
-    elif a.pfx:
-        pfx = Path(a.pfx)
-        if not pfx.exists():
-            sys.exit(f"no such certificate file: {pfx}")
-        base = ["/f", str(pfx)]
-        pw = os.environ.get(a.password_env, "")
-        if pw:
-            base += ["/p", pw]
+    temp_thumb = None  # set only if this run imported a certificate
+    try:
+        if a.azure_dlib or a.azure_metadata:
+            if not (a.azure_dlib and a.azure_metadata):
+                ap.error("--azure-dlib and --azure-metadata go together")
+            base = ["/v", "/dlib", a.azure_dlib, "/dmdf", a.azure_metadata]
+        elif a.thumbprint:
+            thumb = a.thumbprint.replace(" ", "")
+            if not THUMBPRINT_RE.fullmatch(thumb):
+                ap.error("--thumbprint must be 40 hex characters (SHA-1)")
+            base = ["/sha1", thumb]
+        elif a.pfx:
+            pfx = Path(a.pfx)
+            if not pfx.exists():
+                sys.exit(f"no such certificate file: {pfx}")
+            thumb, imported = import_pfx(pfx.resolve(), a.pfx_env)
+            if imported:
+                temp_thumb = thumb
+            base = ["/sha1", thumb]
         else:
-            print(f"note: {a.password_env} is not set; signtool will prompt if "
-                  "the certificate needs a password")
-    else:
-        ap.error("choose one: --thumbprint, --pfx, or the two --azure- options"
-                 "\n  (nothing to sign with is not the same as nothing to do)")
+            ap.error("choose one: --thumbprint, --pfx, or the two --azure- options"
+                     "\n  (nothing to sign with is not the same as nothing to do)")
 
-    failed = [e.name for e in exes if not sign_one(signtool, e, base)]
-    if failed:
-        sys.exit("\nsigning failed for: " + ", ".join(failed))
+        failed = [e.name for e in exes if not sign_one(signtool, e, base)]
+        if failed:
+            sys.exit("\nsigning failed for: " + ", ".join(failed))
 
-    print("\n" + "=" * 52)
-    ok = all(verify(signtool, e) for e in exes)
-    print("=" * 52)
+        print("\n" + "=" * 52)
+        ok = all(verify(signtool, e) for e in exes)
+        print("=" * 52)
+    finally:
+        if temp_thumb:
+            remove_cert(temp_thumb)
+
     if not ok:
         print("""
 Signed, but this machine does not trust the result. That is expected and
