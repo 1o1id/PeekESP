@@ -23,12 +23,27 @@ on:
       - '.github/workflows/firmware.yml'
   workflow_dispatch:
 
+# The job only reads the repository. Without this block the GITHUB_TOKEN gets
+# the repository's default scope, which can include write access, and a
+# compromised action or dependency in this job would inherit it.
+permissions:
+  contents: read
+
 jobs:
   compile:
     name: Compile the sketch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The last step compares commit dates with `git log -1 -- <path>`.
+          # The default checkout is a one-commit shallow clone, in which every
+          # path "last changed" in that single commit, so both dates are equal
+          # and the comparison can never fail. It needs the real history.
+          fetch-depth: 0
+          # Nothing later in this job pushes, so there is no reason to leave
+          # the token in .git/config where every following step can read it.
+          persist-credentials: false
 
       # 3.11, not 3.12, and this is load-bearing. arduino-cli's ESP32 platform
       # shells out to the esptool.py bundled with core 2.0.17 to produce the
