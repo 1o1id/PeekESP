@@ -122,6 +122,10 @@ object WidgetRenderer {
             clockPage(ctx, c, g, f, reg, bold)
             return bmp
         }
+        if (f.kind == PageKind.POWER && m == null) {
+            noBatteryPage(c, g, f, reg, bold)
+            return bmp
+        }
         if (m == null) {
             message(c, g, f, reg)
             return bmp
@@ -271,6 +275,40 @@ object WidgetRenderer {
             val lp = ink(reg, g.m(12f), Palette.DIM)
             text(c, fit(left, lp, room), rx, g.y(80f), lp)
         }
+    }
+
+    /** Battery is on, but nothing reports one: say so, and say which machines were checked. */
+    private fun noBatteryPage(c: Canvas, g: Geo, f: Frame, reg: Typeface, bold: Typeface) {
+        text(c, "// BATTERY", g.x(44f), g.y(3f), ink(reg, g.m(12f), Palette.DIM))
+        if (f.count > 1) {
+            textRight(c, "${f.index + 1}/${f.count}", g.x(206f), g.y(3f), ink(reg, g.m(12f), Palette.CYAN))
+        }
+
+        // The same cell as the battery page, empty.
+        val outline = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE; strokeWidth = max(1f, g.m(2f)); color = Palette.DIM
+        }
+        c.drawRoundRect(RectF(g.x(12f), g.y(40f), g.x(122f), g.y(90f)), g.m(4f), g.m(4f), outline)
+        c.drawRoundRect(
+            RectF(g.x(122f), g.y(56f), g.x(127f), g.y(74f)), g.m(1f), g.m(1f),
+            Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Palette.DIM },
+        )
+        centered(c, "--", g.x(67f), g.y(65f), ink(bold, g.m(22f), Palette.DIM))
+
+        val rx = g.x(132f)
+        val room = 100f * g.sx
+        val head = ink(bold, g.m(14f), Palette.TEXT)
+        text(c, "NO BATTERY", rx, g.y(34f), head)
+        text(c, "REPORTED", rx, g.y(50f), head)
+
+        val hp = ink(reg, g.m(11f), Palette.DIM)
+        f.hosts.take(2).forEachIndexed { i, h ->
+            text(c, fit("// $h", hp, room), rx, g.y(72f + i * 13f), hp)
+        }
+        if (f.hosts.size > 2) text(c, "+${f.hosts.size - 2} more", rx, g.y(98f), hp)
+
+        val note = ink(reg, g.m(10f), Palette.DIM)
+        centered(c, fit("Machines without a battery are skipped.", note, 224f * g.sx), g.x(120f), g.y(122f), note)
     }
 
     /**

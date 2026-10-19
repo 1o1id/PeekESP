@@ -57,11 +57,18 @@ object Pages {
     /**
      * Each machine, then (if enabled, and only for machines that report a
      * battery) that machine's battery, then the clock last.
+     *
+     * If battery is on but no machine reports one, a single battery page says so
+     * (machine = -1). The device does the same: its power page reads "no battery"
+     * rather than disappearing, which would look like a bug.
      */
     fun build(machines: List<Machine>, look: WidgetStyle): List<PageRef> = buildList {
         machines.forEachIndexed { i, m ->
             add(PageRef(PageKind.MACHINE, i))
             if (look.battery && m.batteryPct != null) add(PageRef(PageKind.POWER, i))
+        }
+        if (look.battery && machines.isNotEmpty() && machines.none { it.batteryPct != null }) {
+            add(PageRef(PageKind.POWER, -1))
         }
         if (look.clock) add(PageRef(PageKind.CLOCK, -1))
     }
@@ -101,6 +108,8 @@ data class Frame(
      */
     val drawTime: Boolean = true,
     val showBattery: Boolean = true,
+    /** Machine names, for the battery page that says no machine reports a battery. */
+    val hosts: List<String> = emptyList(),
 ) {
     /** The widget is a bitmap, so everything on it has to be said here for TalkBack. */
     fun describe(): String {
@@ -109,6 +118,12 @@ data class Frame(
             val p = ClockFmt.parts(nowMs, ZoneId.systemDefault(), Locale.getDefault(), false)
             val parts = mutableListOf("PeekESP clock", "${p.weekday}, ${p.date}")
             message?.let { parts += it }
+            if (count > 1) parts += "tap for the next page"
+            return parts.joinToString(". ")
+        }
+        if (kind == PageKind.POWER && machine == null) {
+            val parts = mutableListOf("PeekESP battery page", "No machine is reporting a battery")
+            if (hosts.isNotEmpty()) parts += "Checked ${hosts.joinToString(", ")}"
             if (count > 1) parts += "tap for the next page"
             return parts.joinToString(". ")
         }
@@ -181,6 +196,14 @@ object FrameBuilder {
                 kind = PageKind.CLOCK, nowMs = nowMs, drawTime = false, showBattery = look.battery,
                 // A clock with no machines would otherwise hide why there is nothing else to see.
                 message = if (machines.isEmpty()) NOTHING else null,
+            )
+        }
+
+        if (page.kind == PageKind.POWER && page.machine < 0) {
+            return Frame(
+                machine = null, index = index, count = pages.size, sinceFetchS = since,
+                kind = PageKind.POWER, nowMs = nowMs, drawTime = false, showBattery = look.battery,
+                hosts = machines.map { it.host },
             )
         }
 

@@ -576,7 +576,7 @@ private fun WidgetPanel(store: StyleStore, onApply: () -> Unit) {
     )
     ToggleRow(
         title = "Battery and charging",
-        subtitle = "Level and charging state for machines that report a battery.",
+        subtitle = "Level and charging state. Only machines that report a battery get a page; if none do, one page says so.",
         checked = look.battery,
         onChange = { look = look.copy(battery = it); store.save(look) },
     )
