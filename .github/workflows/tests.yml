@@ -11,12 +11,22 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The suites only read the repository. Without this block the GITHUB_TOKEN gets
+# the repository's default scope, which can include write access, and a
+# compromised action or dependency in this job would inherit it.
+permissions:
+  contents: read
+
 jobs:
   python:
     name: Python suites
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Nothing later in this job pushes, so there is no reason to leave
+          # the token in .git/config where every following step can read it.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
